@@ -1,5 +1,7 @@
 import 'dart:async';
 import 'package:flutter/foundation.dart';
+
+import '../../../core/notifications/notification_service.dart';
 import '../data/work_session_dao.dart';
 import 'attendance_state.dart';
 
@@ -7,16 +9,20 @@ class AttendanceController extends ChangeNotifier {
   AttendanceState _state = AttendanceState.initial();
   AttendanceState get state => _state;
 
-  final Stopwatch _stopwatch = Stopwatch(); // sólo para RUNNING
+  final Stopwatch _stopwatch = Stopwatch(); // para RUNNING
   Timer? _ticker;
 
+  // ⏱️ Timer de autocierre (17:30 por tu política actual)
+  Timer? _autoStopTimer;
+
   final WorkSessionDao _dao = WorkSessionDao();
+  final NotificationService _notis = NotificationService.instance;
+
   int? _sessionId;
   int? _activePauseId;
 
   int _cachedPausedSeconds = 0; // pausas acumuladas cerradas
 
-  /// Exponer el id de sesión actual (o null si no hay)
   int? get currentSessionId => _sessionId;
 
   void _emit(AttendanceState s) {
@@ -24,21 +30,87 @@ class AttendanceController extends ChangeNotifier {
     notifyListeners();
   }
 
+  // ================== Autocierre 17:30 ==================
+  DateTime _cutoffFor(DateTime startAt) =>
+      DateTime(startAt.year, startAt.month, startAt.day, 17, 30, 0);
+
+  Future<void> _scheduleAutoStop(DateTime startAt) async {
+    _autoStopTimer?.cancel();
+    final cutoff = _cutoffFor(startAt);
+    final now = DateTime.now();
+
+    // Si ya pasó la hora de corte, no cerramos (cuenta como horas extra).
+    if (now.isAfter(cutoff)) return;
+
+    final dur = cutoff.difference(now);
+    _autoStopTimer = Timer(dur, () => _autoStopAt(cutoff));
+  }
+
+  Future<void> _autoStopAt(DateTime cutoff) async {
+    if (_sessionId == null) return;
+
+    // Cierra pausa abierta si existiera
+    if (_activePauseId != null) {
+      await _dao.endPause(_activePauseId!, cutoff);
+      _cachedPausedSeconds = await _dao.getTotalPausedSeconds(_sessionId!);
+      _activePauseId = null;
+    }
+
+    _ticker?.cancel();
+
+    final startAt = _state.startAt!;
+    final paused = _cachedPausedSeconds;
+    int total = cutoff.difference(startAt).inSeconds - paused;
+    if (total < 0) total = 0;
+
+    await _dao.finishSession(
+      id: _sessionId!,
+      end: cutoff,
+      totalSeconds: total,
+    );
+
+    // 🔔 Notificaciones: cerrar “jornada activa” y reprogramar las de la mañana
+    try {
+      await _notis.cancelOngoingActive();
+      await _notis.cancelWorkdayPlan();
+      await _notis.scheduleMorningPlan(); // 07:30 y 07:55 diarias
+    } catch (_) {}
+
+    _emit(_state.copyWith(
+      status: SessionStatus.stopped,
+      endAt: cutoff,
+      elapsed: Duration(seconds: total),
+    ));
+
+    _sessionId = null;
+    _autoStopTimer?.cancel();
+  }
+  // ======================================================
+
   // ----- Init / restore -----
   Future<void> init() async {
-    // Restaura solo si hay sesión ACTIVA (running o paused).
     final active = await _dao.getActive();
     if (active != null) {
       _sessionId = active.id;
 
-      // ¿pausa activa?
       final pause = await _dao.getActivePause(_sessionId!);
       final pausedTotal = await _dao.getTotalPausedSeconds(_sessionId!);
       _cachedPausedSeconds = pausedTotal;
 
       final startAt = active.startAt;
+
+      // Programa autocierre solo si no pasó la hora
+      await _scheduleAutoStop(startAt);
+
+      // 🔔 Notificaciones al restaurar: mostrar persistente y plan del día (si aplica)
+      try {
+        await _notis.showOngoingActive();
+        await _notis.cancelMorningPlan(); // ya estamos en jornada
+        await _notis
+            .scheduleWorkdayPlan(); // 13:00, 14:00, 16:45, 17:00, 17:15, 17:25
+      } catch (_) {}
+
       if (pause != null) {
-        // En pausa: no avanza el cronómetro
         _activePauseId = pause['id'] as int;
         final elapsed =
             DateTime.now().difference(startAt).inSeconds - pausedTotal;
@@ -50,13 +122,11 @@ class AttendanceController extends ChangeNotifier {
         ));
         return;
       } else {
-        // En running
         _startTicker(startAt);
         return;
       }
     }
 
-    // Si NO hay sesión activa: arrancar en Idle (pantalla en 0).
     _emit(AttendanceState.initial());
   }
 
@@ -88,9 +158,8 @@ class AttendanceController extends ChangeNotifier {
 
   // ====== Actions ======
 
-  /// Inicia la jornada SIN fotos (flujo actual).
+  /// Inicia la jornada SIN fotos.
   Future<void> start() async {
-    // Evita duplicados "running" colgados en DB
     await _dao.cancelActiveIfAny();
 
     if (_state.status == SessionStatus.running ||
@@ -103,10 +172,17 @@ class AttendanceController extends ChangeNotifier {
     _activePauseId = null;
     _cachedPausedSeconds = 0;
     _startTicker(now);
+
+    // ⏲️ Autocierre y 🔔 notificaciones
+    await _scheduleAutoStop(now);
+    try {
+      await _notis.showOngoingActive();
+      await _notis.cancelMorningPlan();
+      await _notis.scheduleWorkdayPlan();
+    } catch (_) {}
   }
 
-  /// 🆕 Inicia la jornada pasando opcionalmente la selfie y/o foto de contexto.
-  /// Úsalo cuando ya capturaste las imágenes antes de crear la sesión.
+  /// Inicia la jornada con media opcional ya capturada.
   Future<void> startWithMedia({
     String? selfieStart,
     String? photoStart,
@@ -127,6 +203,14 @@ class AttendanceController extends ChangeNotifier {
     _activePauseId = null;
     _cachedPausedSeconds = 0;
     _startTicker(now);
+
+    // ⏲️ Autocierre y 🔔 notificaciones
+    await _scheduleAutoStop(now);
+    try {
+      await _notis.showOngoingActive();
+      await _notis.cancelMorningPlan();
+      await _notis.scheduleWorkdayPlan();
+    } catch (_) {}
   }
 
   Future<void> pause() async {
@@ -143,19 +227,18 @@ class AttendanceController extends ChangeNotifier {
     final now = DateTime.now();
     if (_activePauseId != null) {
       await _dao.endPause(_activePauseId!, now);
-      // actualiza pausas acumuladas
       _cachedPausedSeconds = await _dao.getTotalPausedSeconds(_sessionId!);
       _activePauseId = null;
     }
     _startTicker(_state.startAt!);
   }
 
-  /// Finaliza la jornada (sin registrar fotos finales).
+  /// Finaliza la jornada (sin fotos finales).
   Future<void> stop() async {
     if (_sessionId == null) return;
     _ticker?.cancel();
+    _autoStopTimer?.cancel();
 
-    // Si está pausado, cerramos la pausa activa primero
     if (_activePauseId != null) {
       await _dao.endPause(_activePauseId!, DateTime.now());
       _cachedPausedSeconds = await _dao.getTotalPausedSeconds(_sessionId!);
@@ -171,6 +254,13 @@ class AttendanceController extends ChangeNotifier {
       totalSeconds: total < 0 ? 0 : total,
     );
 
+    // 🔔 Notificaciones tras cierre
+    try {
+      await _notis.cancelOngoingActive();
+      await _notis.cancelWorkdayPlan();
+      await _notis.scheduleMorningPlan();
+    } catch (_) {}
+
     _emit(_state.copyWith(
       status: SessionStatus.stopped,
       endAt: DateTime.now(),
@@ -180,13 +270,14 @@ class AttendanceController extends ChangeNotifier {
     _sessionId = null;
   }
 
-  /// 🆕 Finaliza la jornada registrando selfie y/o foto de contexto finales.
+  /// Finaliza la jornada registrando selfie y/o foto finales.
   Future<void> stopWithMedia({
     String? selfieEnd,
     String? photoEnd,
   }) async {
     if (_sessionId == null) return;
     _ticker?.cancel();
+    _autoStopTimer?.cancel();
 
     if (_activePauseId != null) {
       await _dao.endPause(_activePauseId!, DateTime.now());
@@ -206,6 +297,13 @@ class AttendanceController extends ChangeNotifier {
       photoEnd: photoEnd,
     );
 
+    // 🔔 Notificaciones tras cierre
+    try {
+      await _notis.cancelOngoingActive();
+      await _notis.cancelWorkdayPlan();
+      await _notis.scheduleMorningPlan();
+    } catch (_) {}
+
     _emit(_state.copyWith(
       status: SessionStatus.stopped,
       endAt: DateTime.now(),
@@ -217,14 +315,20 @@ class AttendanceController extends ChangeNotifier {
 
   Future<void> resetToIdle() async {
     _ticker?.cancel();
+    _autoStopTimer?.cancel();
 
-    // Si hay una sesión activa en memoria, elimínala de la DB (y sus pausas/QR).
     if (_sessionId != null) {
       await _dao.cancelSession(_sessionId!);
     } else {
-      // Por si hubiera quedado alguna "running" sin cache local.
       await _dao.cancelActiveIfAny();
     }
+
+    // 🔔 Limpiar notificaciones de jornada y dejar las de la mañana activas
+    try {
+      await _notis.cancelOngoingActive();
+      await _notis.cancelWorkdayPlan();
+      await _notis.scheduleMorningPlan();
+    } catch (_) {}
 
     _sessionId = null;
     _activePauseId = null;
@@ -232,7 +336,7 @@ class AttendanceController extends ChangeNotifier {
     _emit(AttendanceState.initial());
   }
 
-  // ----- Media (selfies / fotos de obra) -----
+  // ----- Media -----
   Future<void> setSelfieStart(String filePath) async {
     if (_sessionId == null) return;
     await _dao.setSelfieStart(_sessionId!, filePath);
@@ -276,6 +380,7 @@ class AttendanceController extends ChangeNotifier {
   @override
   void dispose() {
     _ticker?.cancel();
+    _autoStopTimer?.cancel();
     super.dispose();
   }
 }

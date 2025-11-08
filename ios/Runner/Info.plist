@@ -49,5 +49,13 @@
 	<!-- 🔒 Permisos de privacidad -->
 	<key>NSCameraUsageDescription</key>
 	<string>Necesitamos usar la cámara para tomar selfies, fotos de obra y escanear códigos QR del proyecto.</string>
+	<key>UIBackgroundModes</key>
+<array>
+  <string>processing</string>
+  <string>remote-notification</string>
+</array>
+<key>NSUserTrackingUsageDescription</key>
+<string>Usamos notificaciones para recordarte eventos de tu jornada.</string>
+
 </dict>
 </plist>
