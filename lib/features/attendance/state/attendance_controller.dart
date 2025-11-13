@@ -5,18 +5,23 @@ import '../../../core/notifications/notification_service.dart';
 import '../data/work_session_dao.dart';
 import 'attendance_state.dart';
 
+// 🔽 NUEVO: imports para ubicación y servicio en segundo plano
+import 'package:flutter_foreground_task/flutter_foreground_task.dart';
+import '../bg_location_task.dart'; // handler del servicio BG
+import '../location_logger.dart'; // logger de ubicación en foreground
+
 class AttendanceController extends ChangeNotifier {
   AttendanceState _state = AttendanceState.initial();
   AttendanceState get state => _state;
 
-  final Stopwatch _stopwatch = Stopwatch(); // para RUNNING
   Timer? _ticker;
-
-  // ⏱️ Timer de autocierre (17:30 por tu política actual)
   Timer? _autoStopTimer;
 
   final WorkSessionDao _dao = WorkSessionDao();
   final NotificationService _notis = NotificationService.instance;
+
+  // 🔽 NUEVO: logger de ubicación (app abierta)
+  late final LocationLogger _loc = LocationLogger(_dao);
 
   int? _sessionId;
   int? _activePauseId;
@@ -30,17 +35,37 @@ class AttendanceController extends ChangeNotifier {
     notifyListeners();
   }
 
-  // ================== Autocierre 17:30 ==================
-  DateTime _cutoffFor(DateTime startAt) =>
-      DateTime(startAt.year, startAt.month, startAt.day, 17, 30, 0);
+  // ================== Política de cortes ==================
+  DateTime _fivePmOf(DateTime d) => DateTime(d.year, d.month, d.day, 17, 0, 0);
+  DateTime _fiveThirtyOf(DateTime d) =>
+      DateTime(d.year, d.month, d.day, 17, 30, 0);
+
+  bool _isEveningStart(DateTime startAt) =>
+      startAt.isAfter(_fivePmOf(startAt)) ||
+      startAt.isAtSameMomentAs(_fivePmOf(startAt));
+
+  /// Regla:
+  /// - Si empieza < 17:00 → corte a 17:30 del mismo día
+  /// - Si empieza >= 17:00 → corte a startAt + 8 horas (sin corte a 17:30)
+  DateTime _policyCutoff(DateTime startAt) {
+    if (_isEveningStart(startAt)) {
+      return startAt.add(const Duration(hours: 8));
+    }
+    return _fiveThirtyOf(startAt);
+  }
+  // ========================================================
 
   Future<void> _scheduleAutoStop(DateTime startAt) async {
     _autoStopTimer?.cancel();
-    final cutoff = _cutoffFor(startAt);
+
+    final cutoff = _policyCutoff(startAt);
     final now = DateTime.now();
 
-    // Si ya pasó la hora de corte, no cerramos (cuenta como horas extra).
-    if (now.isAfter(cutoff)) return;
+    // Si ya pasó el corte aplicable, cerrar retroactivamente
+    if (now.isAfter(cutoff) || now.isAtSameMomentAs(cutoff)) {
+      await _autoStopAt(cutoff);
+      return;
+    }
 
     final dur = cutoff.difference(now);
     _autoStopTimer = Timer(dur, () => _autoStopAt(cutoff));
@@ -76,6 +101,12 @@ class AttendanceController extends ChangeNotifier {
       await _notis.scheduleMorningPlan(); // 07:30 y 07:55 diarias
     } catch (_) {}
 
+    // 🛰️ NUEVO: detener servicios de ubicación
+    try {
+      _loc.stop();
+      await FlutterForegroundTask.stopService();
+    } catch (_) {}
+
     _emit(_state.copyWith(
       status: SessionStatus.stopped,
       endAt: cutoff,
@@ -85,7 +116,6 @@ class AttendanceController extends ChangeNotifier {
     _sessionId = null;
     _autoStopTimer?.cancel();
   }
-  // ======================================================
 
   // ----- Init / restore -----
   Future<void> init() async {
@@ -93,13 +123,21 @@ class AttendanceController extends ChangeNotifier {
     if (active != null) {
       _sessionId = active.id;
 
+      final startAt = active.startAt;
+      final cutoff = _policyCutoff(startAt);
+      final now = DateTime.now();
+
+      // Si al restaurar ya pasó el corte aplicable, cerrar retroactivamente
+      if (now.isAfter(cutoff) || now.isAtSameMomentAs(cutoff)) {
+        await _autoStopAt(cutoff);
+        return;
+      }
+
       final pause = await _dao.getActivePause(_sessionId!);
       final pausedTotal = await _dao.getTotalPausedSeconds(_sessionId!);
       _cachedPausedSeconds = pausedTotal;
 
-      final startAt = active.startAt;
-
-      // Programa autocierre solo si no pasó la hora
+      // Programa autocierre según política
       await _scheduleAutoStop(startAt);
 
       // 🔔 Notificaciones al restaurar: mostrar persistente y plan del día (si aplica)
@@ -110,10 +148,21 @@ class AttendanceController extends ChangeNotifier {
             .scheduleWorkdayPlan(); // 13:00, 14:00, 16:45, 17:00, 17:15, 17:25
       } catch (_) {}
 
+      // 🛰️ NUEVO: reanudar registro de ubicación (FG y BG)
+      try {
+        if (_sessionId != null && await _loc.ensurePermissions()) {
+          _loc.startForegroundLoop(_sessionId!);
+        }
+        await FlutterForegroundTask.startService(
+          notificationTitle: 'Jornada activa',
+          notificationText: 'Registrando ubicación cada hora',
+          callback: attendanceStartCallback,
+        );
+      } catch (_) {}
+
       if (pause != null) {
         _activePauseId = pause['id'] as int;
-        final elapsed =
-            DateTime.now().difference(startAt).inSeconds - pausedTotal;
+        final elapsed = now.difference(startAt).inSeconds - pausedTotal;
         _emit(_state.copyWith(
           status: SessionStatus.paused,
           startAt: startAt,
@@ -131,13 +180,20 @@ class AttendanceController extends ChangeNotifier {
   }
 
   void _startTicker(DateTime startAt) {
-    _stopwatch
-      ..reset()
-      ..start();
     _ticker?.cancel();
     _ticker = Timer.periodic(const Duration(seconds: 1), (_) async {
+      final now = DateTime.now();
+      final cutoff = _policyCutoff(startAt);
+
+      // Si alcanzamos el corte aplicable, cerrar de inmediato
+      if (now.isAfter(cutoff) || now.isAtSameMomentAs(cutoff)) {
+        await _autoStopAt(cutoff);
+        return;
+      }
+
       final paused = _cachedPausedSeconds + await _currentOpenPauseSeconds();
-      final secs = DateTime.now().difference(startAt).inSeconds - paused;
+      final secs = now.difference(startAt).inSeconds - paused;
+
       _emit(_state.copyWith(
         status: SessionStatus.running,
         startAt: startAt,
@@ -145,6 +201,7 @@ class AttendanceController extends ChangeNotifier {
         endAt: null,
       ));
     });
+
     _emit(_state.copyWith(status: SessionStatus.running, startAt: startAt));
   }
 
@@ -152,6 +209,8 @@ class AttendanceController extends ChangeNotifier {
     if (_sessionId == null) return 0;
     final ap = await _dao.getActivePause(_sessionId!);
     if (ap == null) return 0;
+
+    // ⚠️ Si tu BD guarda segundos unix, convierte a ms: (ap['start_at'] as int) * 1000
     final start = DateTime.fromMillisecondsSinceEpoch(ap['start_at'] as int);
     return DateTime.now().difference(start).inSeconds;
   }
@@ -179,6 +238,18 @@ class AttendanceController extends ChangeNotifier {
       await _notis.showOngoingActive();
       await _notis.cancelMorningPlan();
       await _notis.scheduleWorkdayPlan();
+    } catch (_) {}
+
+    // 🛰️ NUEVO: ubicación FG + BG
+    try {
+      if (_sessionId != null && await _loc.ensurePermissions()) {
+        _loc.startForegroundLoop(_sessionId!); // app abierta
+      }
+      await FlutterForegroundTask.startService(
+        notificationTitle: 'Jornada activa',
+        notificationText: 'Registrando ubicación cada hora',
+        callback: attendanceStartCallback, // servicio en segundo plano
+      );
     } catch (_) {}
   }
 
@@ -211,6 +282,18 @@ class AttendanceController extends ChangeNotifier {
       await _notis.cancelMorningPlan();
       await _notis.scheduleWorkdayPlan();
     } catch (_) {}
+
+    // 🛰️ NUEVO: ubicación FG + BG
+    try {
+      if (_sessionId != null && await _loc.ensurePermissions()) {
+        _loc.startForegroundLoop(_sessionId!);
+      }
+      await FlutterForegroundTask.startService(
+        notificationTitle: 'Jornada activa',
+        notificationText: 'Registrando ubicación cada hora',
+        callback: attendanceStartCallback,
+      );
+    } catch (_) {}
   }
 
   Future<void> pause() async {
@@ -220,6 +303,12 @@ class AttendanceController extends ChangeNotifier {
     _ticker?.cancel();
     final elapsed = _state.elapsed;
     _emit(_state.copyWith(status: SessionStatus.paused, elapsed: elapsed));
+
+    // 🛰️ NUEVO: detener ubicación mientras está en pausa
+    try {
+      _loc.stop();
+      await FlutterForegroundTask.stopService();
+    } catch (_) {}
   }
 
   Future<void> resume() async {
@@ -231,6 +320,18 @@ class AttendanceController extends ChangeNotifier {
       _activePauseId = null;
     }
     _startTicker(_state.startAt!);
+
+    // 🛰️ NUEVO: reanudar ubicación FG + BG
+    try {
+      if (_sessionId != null && await _loc.ensurePermissions()) {
+        _loc.startForegroundLoop(_sessionId!);
+      }
+      await FlutterForegroundTask.startService(
+        notificationTitle: 'Jornada activa',
+        notificationText: 'Registrando ubicación cada hora',
+        callback: attendanceStartCallback,
+      );
+    } catch (_) {}
   }
 
   /// Finaliza la jornada (sin fotos finales).
@@ -259,6 +360,12 @@ class AttendanceController extends ChangeNotifier {
       await _notis.cancelOngoingActive();
       await _notis.cancelWorkdayPlan();
       await _notis.scheduleMorningPlan();
+    } catch (_) {}
+
+    // 🛰️ NUEVO: detener ubicación
+    try {
+      _loc.stop();
+      await FlutterForegroundTask.stopService();
     } catch (_) {}
 
     _emit(_state.copyWith(
@@ -304,6 +411,12 @@ class AttendanceController extends ChangeNotifier {
       await _notis.scheduleMorningPlan();
     } catch (_) {}
 
+    // 🛰️ NUEVO: detener ubicación
+    try {
+      _loc.stop();
+      await FlutterForegroundTask.stopService();
+    } catch (_) {}
+
     _emit(_state.copyWith(
       status: SessionStatus.stopped,
       endAt: DateTime.now(),
@@ -328,6 +441,12 @@ class AttendanceController extends ChangeNotifier {
       await _notis.cancelOngoingActive();
       await _notis.cancelWorkdayPlan();
       await _notis.scheduleMorningPlan();
+    } catch (_) {}
+
+    // 🛰️ NUEVO: detener ubicación
+    try {
+      _loc.stop();
+      await FlutterForegroundTask.stopService();
     } catch (_) {}
 
     _sessionId = null;
@@ -381,6 +500,19 @@ class AttendanceController extends ChangeNotifier {
   void dispose() {
     _ticker?.cancel();
     _autoStopTimer?.cancel();
+
+    // 🛰️ NUEVO: asegurar stop de ubicación al destruir controlador
+    try {
+      _loc.stop();
+      FlutterForegroundTask.stopService();
+    } catch (_) {}
+
     super.dispose();
   }
+}
+
+// 🔽 NUEVO: callback de entrada para el Foreground Service (en este archivo)
+@pragma('vm:entry-point')
+void attendanceStartCallback() {
+  FlutterForegroundTask.setTaskHandler(BgLocationTask());
 }

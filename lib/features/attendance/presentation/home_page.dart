@@ -44,23 +44,26 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
 
   Future<void> _bootstrap() async {
     try {
-      // ⛑️ Si init tarda o falla, no dejamos la pantalla colgada
       await _controller.init().timeout(const Duration(seconds: 5));
     } on TimeoutException {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-          content: Text('Inicio lento. Entrando sin restaurar sesión.'),
-          behavior: SnackBarBehavior.floating,
-          margin: EdgeInsets.all(16),
-        ));
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Inicio lento. Entrando sin restaurar sesión.'),
+            behavior: SnackBarBehavior.floating,
+            margin: EdgeInsets.all(16),
+          ),
+        );
       }
     } catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-          content: Text('No se pudo inicializar completamente: $e'),
-          behavior: SnackBarBehavior.floating,
-          margin: const EdgeInsets.all(16),
-        ));
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('No se pudo inicializar completamente: $e'),
+            behavior: SnackBarBehavior.floating,
+            margin: const EdgeInsets.all(16),
+          ),
+        );
       }
     } finally {
       if (mounted) setState(() => _loading = false);
@@ -87,7 +90,7 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
       'Jueves',
       'Viernes',
       'Sábado',
-      'Domingo'
+      'Domingo',
     ];
     const mo = [
       'Ene',
@@ -101,7 +104,7 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
       'Sep',
       'Oct',
       'Nov',
-      'Dic'
+      'Dic',
     ];
     final hh = d.hour.toString().padLeft(2, '0');
     final mm = d.minute.toString().padLeft(2, '0');
@@ -114,11 +117,13 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
     await _controller.resetToIdle();
     if (!mounted) return;
     setState(() => _flyToCorner = false);
-    ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-      content: Text('Jornada archivada en Historial'),
-      behavior: SnackBarBehavior.floating,
-      margin: EdgeInsets.all(16),
-    ));
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(
+        content: Text('Jornada archivada en Historial'),
+        behavior: SnackBarBehavior.floating,
+        margin: EdgeInsets.all(16),
+      ),
+    );
   }
 
   // ========= Helpers permisos/cámara/archivos =========
@@ -142,14 +147,18 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
   }
 
   Future<String?> _saveXFile(
-      XFile file, String subfolder, String prefix) async {
+    XFile file,
+    String subfolder,
+    String prefix,
+  ) async {
     final dir = await getApplicationDocumentsDirectory();
     final folder = Directory(p.join(dir.path, subfolder));
     if (!await folder.exists()) await folder.create(recursive: true);
 
     final ts = DateTime.now().millisecondsSinceEpoch;
-    final ext =
-        p.extension(file.path).isEmpty ? '.jpg' : p.extension(file.path);
+    final ext = p.extension(file.path).isEmpty
+        ? '.jpg'
+        : p.extension(file.path);
     final dest = p.join(folder.path, '$prefix-$ts$ext');
     await File(file.path).copy(dest);
     return dest;
@@ -163,8 +172,9 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
       return picker
           .pickImage(
             source: ImageSource.camera,
-            preferredCameraDevice:
-                front ? CameraDevice.front : CameraDevice.rear,
+            preferredCameraDevice: front
+                ? CameraDevice.front
+                : CameraDevice.rear,
             imageQuality: 85,
           )
           .timeout(const Duration(seconds: 25));
@@ -172,10 +182,7 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
 
     // Android: no forzar dispositivo de cámara
     return picker
-        .pickImage(
-          source: ImageSource.camera,
-          imageQuality: 85,
-        )
+        .pickImage(source: ImageSource.camera, imageQuality: 85)
         .timeout(const Duration(seconds: 25));
   }
 
@@ -188,21 +195,25 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
         builder: (_) => AlertDialog(
           title: const Text('Cámara no disponible en escritorio'),
           content: const Text(
-              'Se iniciará la jornada sin fotos (luego integramos cámara de escritorio).'),
+            'Se iniciará la jornada sin fotos (luego integramos cámara de escritorio).',
+          ),
           actions: [
             TextButton(
-                onPressed: () => Navigator.pop(context),
-                child: const Text('Aceptar')),
+              onPressed: () => Navigator.pop(context),
+              child: const Text('Aceptar'),
+            ),
           ],
         ),
       );
       await _controller.start();
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-        content: Text('Jornada iniciada'),
-        behavior: SnackBarBehavior.floating,
-        margin: EdgeInsets.all(16),
-      ));
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Jornada iniciada'),
+          behavior: SnackBarBehavior.floating,
+          margin: EdgeInsets.all(16),
+        ),
+      );
       return;
     }
 
@@ -217,11 +228,13 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
         builder: (_) => AlertDialog(
           title: const Text('Selfie de inicio'),
           content: const Text(
-              'Tómate un selfie para registrar tu inicio de jornada.'),
+            'Tómate un selfie para registrar tu inicio de jornada.',
+          ),
           actions: [
             TextButton(
-                onPressed: () => Navigator.pop(context),
-                child: const Text('Continuar'))
+              onPressed: () => Navigator.pop(context),
+              child: const Text('Continuar'),
+            ),
           ],
         ),
       );
@@ -239,8 +252,9 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
           content: const Text('Toma una foto de tu lugar de trabajo.'),
           actions: [
             TextButton(
-                onPressed: () => Navigator.pop(context),
-                child: const Text('Continuar'))
+              onPressed: () => Navigator.pop(context),
+              child: const Text('Continuar'),
+            ),
           ],
         ),
       );
@@ -250,28 +264,36 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
       final sitePath = await _saveXFile(site, 'sites', 'start_site');
 
       await _controller.startWithMedia(
-          selfieStart: selfiePath, photoStart: sitePath);
+        selfieStart: selfiePath,
+        photoStart: sitePath,
+      );
 
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-        content: Text('Inicio registrado con fotos'),
-        behavior: SnackBarBehavior.floating,
-        margin: EdgeInsets.all(16),
-      ));
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Inicio registrado con fotos'),
+          behavior: SnackBarBehavior.floating,
+          margin: EdgeInsets.all(16),
+        ),
+      );
     } on TimeoutException {
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-        content: Text('La cámara tardó demasiado. Intenta de nuevo.'),
-        behavior: SnackBarBehavior.floating,
-        margin: EdgeInsets.all(16),
-      ));
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('La cámara tardó demasiado. Intenta de nuevo.'),
+          behavior: SnackBarBehavior.floating,
+          margin: EdgeInsets.all(16),
+        ),
+      );
     } catch (e) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-        content: Text('No se pudo usar la cámara: $e'),
-        behavior: SnackBarBehavior.floating,
-        margin: const EdgeInsets.all(16),
-      ));
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('No se pudo usar la cámara: $e'),
+          behavior: SnackBarBehavior.floating,
+          margin: const EdgeInsets.all(16),
+        ),
+      );
       await _controller.start(); // fallback
     }
   }
@@ -286,7 +308,8 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
 
     final state = _controller.state;
 
-    const objetivo = 'Flujo: Iniciar → Pausar → (Continuar | Finalizar). '
+    const objetivo =
+        'Flujo: Iniciar → Pausar → (Continuar | Finalizar). '
         'El cronómetro excluye pausas. "Cancelar" reinicia si el registro fue incorrecto.';
 
     final header = switch (state.status) {
@@ -328,10 +351,9 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
                 label: const Text('Escanear QR de obra'),
                 onPressed: () async {
                   if (!mounted) return;
-                  await Navigator.of(context).push(
-                    MaterialPageRoute(
-                        builder: (_) => QrScanPage(controller: _controller)),
-                  );
+                  await Navigator.of(
+                    context,
+                  ).push(MaterialPageRoute(builder: (_) => const QrScanPage()));
                 },
               ),
             ),
@@ -349,14 +371,18 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
             Row(
               children: [
                 Expanded(
-                    child: OutlinedButton(
-                        onPressed: _controller.resume,
-                        child: const Text('Continuar'))),
+                  child: OutlinedButton(
+                    onPressed: _controller.resume,
+                    child: const Text('Continuar'),
+                  ),
+                ),
                 const SizedBox(width: 12),
                 Expanded(
-                    child: FilledButton(
-                        onPressed: _controller.stop,
-                        child: const Text('Finalizar'))),
+                  child: FilledButton(
+                    onPressed: _controller.stop,
+                    child: const Text('Finalizar'),
+                  ),
+                ),
               ],
             ),
             const SizedBox(height: 8),
@@ -368,10 +394,9 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
                 label: const Text('Escanear QR de obra'),
                 onPressed: () async {
                   if (!mounted) return;
-                  await Navigator.of(context).push(
-                    MaterialPageRoute(
-                        builder: (_) => QrScanPage(controller: _controller)),
-                  );
+                  await Navigator.of(
+                    context,
+                  ).push(MaterialPageRoute(builder: (_) => const QrScanPage()));
                 },
               ),
             ),
@@ -386,7 +411,9 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
       return ConstrainedBox(
         constraints: const BoxConstraints.tightFor(height: 56),
         child: FilledButton(
-            onPressed: _acceptAndArchive, child: const Text('Aceptar')),
+          onPressed: _acceptAndArchive,
+          child: const Text('Aceptar'),
+        ),
       );
     }
 
@@ -400,20 +427,19 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
-              Text(_formatLongDate(_now),
-                  style: Theme.of(context).textTheme.labelLarge),
+              Text(
+                _formatLongDate(_now),
+                style: Theme.of(context).textTheme.labelLarge,
+              ),
               const SizedBox(height: 10),
               TimerDisplay(elapsed: state.elapsed),
               const SizedBox(height: 8),
-              Text(
-                switch (state.status) {
-                  SessionStatus.running => 'Contando…',
-                  SessionStatus.paused => 'Pausado',
-                  SessionStatus.idle => '00:00:00',
-                  SessionStatus.stopped => 'Tiempo total',
-                },
-                style: Theme.of(context).textTheme.bodyMedium,
-              ),
+              Text(switch (state.status) {
+                SessionStatus.running => 'Contando…',
+                SessionStatus.paused => 'Pausado',
+                SessionStatus.idle => '00:00:00',
+                SessionStatus.stopped => 'Tiempo total',
+              }, style: Theme.of(context).textTheme.bodyMedium),
               if (state.startAt != null) ...[
                 const SizedBox(height: 10),
                 Text(
@@ -432,8 +458,9 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
         return AnimatedAlign(
           duration: _flyDuration,
           curve: Curves.easeInOut,
-          alignment:
-              _flyToCorner ? const Alignment(-0.98, -0.92) : Alignment.center,
+          alignment: _flyToCorner
+              ? const Alignment(-0.98, -0.92)
+              : Alignment.center,
           child: AnimatedScale(
             duration: _flyDuration,
             curve: Curves.easeInOut,
@@ -454,8 +481,10 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
           icon: const Icon(Icons.menu_book_outlined),
           onPressed: () async {
             if (!mounted) return;
-            await Navigator.push(context,
-                MaterialPageRoute(builder: (_) => const HistoryPage()));
+            await Navigator.push(
+              context,
+              MaterialPageRoute(builder: (_) => const HistoryPage()),
+            );
           },
         ),
       ),
@@ -473,9 +502,11 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
                 ),
               ),
               const SizedBox(height: 12),
-              Text(header,
-                  style: Theme.of(context).textTheme.titleLarge,
-                  textAlign: TextAlign.center),
+              Text(
+                header,
+                style: Theme.of(context).textTheme.titleLarge,
+                textAlign: TextAlign.center,
+              ),
               const Spacer(),
               SizedBox(height: 320, child: buildSummaryCard()),
               const Spacer(),

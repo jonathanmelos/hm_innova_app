@@ -1,171 +1,125 @@
-// lib/features/attendance/presentation/qr_scan_page.dart
-import 'dart:async';
-import 'dart:convert' as dartConvert;
+import 'dart:convert' as dart_convert;
 import 'package:flutter/material.dart';
 import 'package:mobile_scanner/mobile_scanner.dart';
-import '../state/attendance_controller.dart';
 
-/// Pantalla de escaneo QR para registrar proyecto/área.
-/// Requiere tener en pubspec:
-///   mobile_scanner: ^6.0.2
+import '../data/work_session_dao.dart'; // ✅ desde /presentation/ a /data es un solo nivel
+
+/// Pantalla para escanear un QR y registrar el resultado en la sesión activa.
+/// Acepta:
+///  - Texto plano → se guarda como `description`
+///  - JSON con llaves {"project_code","area","description"}
 class QrScanPage extends StatefulWidget {
-  const QrScanPage({super.key, required this.controller});
+  /// Opcional: si le pasas un controller desde fuera (por ejemplo, para reutilizarlo
+  /// o probar), el widget lo usará. Si no, crea uno interno.
+  final MobileScannerController? controller;
 
-  final AttendanceController controller;
+  const QrScanPage({super.key, this.controller});
 
   @override
   State<QrScanPage> createState() => _QrScanPageState();
 }
 
 class _QrScanPageState extends State<QrScanPage> {
-  final MobileScannerController _scanner = MobileScannerController(
-    facing: CameraFacing.back,
-    torchEnabled: false,
-    detectionSpeed: DetectionSpeed.normal,
-  );
+  final WorkSessionDao _dao = WorkSessionDao();
 
-  bool _consumed = false; // evita múltiples lecturas del mismo frame
-  String? _lastRaw;
+  late final MobileScannerController _controller =
+      widget.controller ?? MobileScannerController();
 
-  Future<void> _handleDetection(BarcodeCapture cap) async {
-    if (_consumed) return;
-
-    final codes = cap.barcodes;
-    if (codes.isEmpty) return;
-
-    final raw = codes.first.rawValue;
-    if (raw == null || raw.isEmpty) return;
-
-    // Evita dobles disparos del mismo valor
-    if (_lastRaw == raw) return;
-    _lastRaw = raw;
-    _consumed = true;
-
-    try {
-      // Puedes definir tu propio formato de QR. Ejemplos aceptados:
-      // - "project=AVANTINO;area=Bloque B;desc=Instalación luminarias"
-      // - JSON: {"project":"AVANTINO","area":"Bloque B","desc":"Instalación luminarias"}
-      String? project;
-      String? area;
-      String? desc;
-
-      if (raw.trim().startsWith('{')) {
-        // intento parseo JSON simple
-        final map = _tryParseJson(raw);
-        project = map['project']?.toString();
-        area = map['area']?.toString();
-        desc = map['desc']?.toString();
-      } else {
-        // parseo tipo key=value;key=value
-        final parts = raw.split(RegExp(r'[;,\n]'));
-        for (final p in parts) {
-          final kv = p.split('=');
-          if (kv.length == 2) {
-            final k = kv[0].trim().toLowerCase();
-            final v = kv[1].trim();
-            if (k == 'project' || k == 'proyecto') project = v;
-            if (k == 'area') area = v;
-            if (k == 'desc' || k == 'descripcion') desc = v;
-          }
-        }
-      }
-
-      // Guarda el evento de escaneo en la DB
-      await widget.controller.logQrScan(
-        projectCode: project,
-        area: area,
-        description: desc ?? _lastRaw, // respaldo: guarda el raw si no hay desc
-        when: DateTime.now(),
-      );
-
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('QR registrado'),
-          behavior: SnackBarBehavior.floating,
-          margin: EdgeInsets.all(16),
-        ),
-      );
-
-      // Cierra la pantalla después de un pequeño delay para que se vea el SnackBar
-      await Future.delayed(const Duration(milliseconds: 400));
-      if (!mounted) return;
-      Navigator.of(context).pop();
-    } catch (e) {
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text('Error al registrar QR: $e'),
-          behavior: SnackBarBehavior.floating,
-          margin: const EdgeInsets.all(16),
-        ),
-      );
-      // Permite reintentar si falló
-      _consumed = false;
-    }
-  }
-
-  Map<String, dynamic> _tryParseJson(String raw) {
-    try {
-      // ignore: avoid_dynamic_calls
-      return (dartConvert.jsonDecode(raw) as Map).cast<String, dynamic>();
-    } catch (_) {
-      return <String, dynamic>{};
-    }
-  }
+  bool _handled = false;
 
   @override
   void dispose() {
-    _scanner.dispose();
+    // Solo lo cerramos si lo creamos nosotros
+    if (widget.controller == null) {
+      _controller.dispose();
+    }
     super.dispose();
+  }
+
+  Future<void> _handleBarcode(BarcodeCapture capture) async {
+    if (_handled) return;
+    final code = capture.barcodes.isNotEmpty
+        ? capture.barcodes.first.rawValue
+        : null;
+    if (code == null || code.isEmpty) return;
+
+    _handled = true;
+
+    try {
+      final active = await _dao.getActive();
+      if (active == null) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('No hay una jornada activa.')),
+          );
+          Navigator.of(context).pop();
+        }
+        return;
+      }
+
+      String? projectCode;
+      String? area;
+      String? description;
+
+      // Intentar parsear como JSON
+      try {
+        final data = dart_convert.jsonDecode(code);
+        if (data is Map) {
+          projectCode = data['project_code']?.toString();
+          area = data['area']?.toString();
+          description = data['description']?.toString();
+        } else {
+          description = code;
+        }
+      } catch (_) {
+        description = code; // No era JSON
+      }
+
+      await _dao.insertQrScan(
+        sessionId: active.id!,
+        projectCode: projectCode,
+        area: area,
+        description: description,
+        scannedAt: DateTime.now(),
+      );
+
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              'QR registrado: ${description ?? projectCode ?? 'OK'}',
+            ),
+          ),
+        );
+        Navigator.of(context).pop(true);
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text('Error al registrar QR: $e')));
+        Navigator.of(context).pop(false);
+      }
+    }
   }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Escanear QR de obra'),
+        title: const Text('Escanear QR'),
         actions: [
           IconButton(
-            tooltip: 'Cambiar cámara',
-            icon: const Icon(Icons.cameraswitch),
-            onPressed: () => _scanner.switchCamera(),
+            icon: const Icon(Icons.flash_on),
+            onPressed: () => _controller.toggleTorch(),
           ),
           IconButton(
-            tooltip: 'Linterna',
-            icon: const Icon(Icons.flash_on),
-            onPressed: () => _scanner.toggleTorch(),
+            icon: const Icon(Icons.cameraswitch),
+            onPressed: () => _controller.switchCamera(),
           ),
         ],
       ),
-      body: Stack(
-        fit: StackFit.expand,
-        children: [
-          MobileScanner(
-            controller: _scanner,
-            onDetect: _handleDetection,
-          ),
-          // Marco simple
-          IgnorePointer(
-            child: Center(
-              child: Container(
-                width: 260,
-                height: 260,
-                decoration: BoxDecoration(
-                  borderRadius: BorderRadius.circular(16),
-                  border: Border.all(
-                    color: Theme.of(context).colorScheme.primary,
-                    width: 3,
-                  ),
-                ),
-              ),
-            ),
-          ),
-        ],
-      ),
+      body: MobileScanner(controller: _controller, onDetect: _handleBarcode),
     );
   }
 }
-
-// Pequeña import de json sin añadir en la cabecera principal
-// para mantener el archivo autocontenido.

@@ -1,26 +1,22 @@
-import 'dart:io';
 import 'package:flutter/material.dart';
-
 import 'app.dart';
 
-// DB desktop
-import 'package:sqflite_common_ffi/sqflite_ffi.dart';
+// Fechas e internacionalización
 import 'package:intl/date_symbol_data_local.dart';
 
 // Notificaciones / TZ
 import 'package:timezone/data/latest.dart' as tzdata;
 import 'package:timezone/timezone.dart' as tz;
-
 import 'core/notifications/notification_service.dart';
+
+// Foreground Service (ubicación en segundo plano)
+import 'package:flutter_foreground_task/flutter_foreground_task.dart';
+import 'features/attendance/bg_location_task.dart'; // handler del servicio
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
 
-  // SQLite FFI solo en escritorio
-  if (Platform.isWindows || Platform.isLinux || Platform.isMacOS) {
-    sqfliteFfiInit();
-    databaseFactory = databaseFactoryFfi;
-  }
+  // (Solo para escritorio usaríamos sqflite_common_ffi; en Android/iOS no hace falta)
 
   // Locale ES
   await initializeDateFormatting('es');
@@ -29,12 +25,44 @@ Future<void> main() async {
   tzdata.initializeTimeZones();
   tz.setLocalLocation(tz.getLocation('America/Guayaquil'));
 
-  // Notificaciones
+  // Inicializa opciones del servicio en primer plano (notificación persistente)
+  FlutterForegroundTask.init(
+    androidNotificationOptions: AndroidNotificationOptions(
+      channelId: 'workday_channel_id',
+      channelName: 'Jornada activa',
+      channelDescription: 'Registro de ubicación en segundo plano',
+      channelImportance: NotificationChannelImportance.LOW,
+      priority: NotificationPriority.LOW,
+      iconData: const NotificationIconData(
+        resType: ResourceType.mipmap,
+        resPrefix: ResourcePrefix.ic,
+        name: 'launcher', // usa tu mipmap/ic_launcher
+      ),
+    ),
+    iosNotificationOptions: const IOSNotificationOptions(
+      showNotification: true,
+      playSound: false,
+    ),
+    foregroundTaskOptions: const ForegroundTaskOptions(
+      interval: 3600000, // 60 min en milisegundos
+      isOnceEvent: false,
+      autoRunOnBoot: false,
+      allowWakeLock: true,
+      allowWifiLock: true,
+    ),
+  );
+
+  // Notificaciones locales propias de la app
   final notis = NotificationService.instance;
   await notis.init();
   await notis.ensurePermissionOnAndroid13();
-  // Recordatorios de la mañana (07:30 y 07:55) todos los días
   await notis.scheduleMorningPlan();
 
-  runApp(const HmInnovaApp());
+  runApp(WithForegroundTask(child: const HmInnovaApp()));
+}
+
+/// Entry-point del Foreground Service (lo llamarás al iniciar la jornada).
+@pragma('vm:entry-point')
+void startForegroundCallback() {
+  FlutterForegroundTask.setTaskHandler(BgLocationTask());
 }

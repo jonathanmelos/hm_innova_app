@@ -56,6 +56,14 @@
 </array>
 <key>NSUserTrackingUsageDescription</key>
 <string>Usamos notificaciones para recordarte eventos de tu jornada.</string>
+<key>NSLocationWhenInUseUsageDescription</key>
+<string>Necesitamos tu ubicación para registrar jornadas.</string>
+<key>NSLocationAlwaysAndWhenInUseUsageDescription</key>
+<string>Necesitamos tu ubicación incluso en segundo plano para registrar jornadas.</string>
+<key>UIBackgroundModes</key>
+<array>
+  <string>location</string>
+</array>
 
 </dict>
 </plist>

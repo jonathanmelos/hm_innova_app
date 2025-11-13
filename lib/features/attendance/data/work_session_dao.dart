@@ -69,7 +69,7 @@ class WorkSessionDao {
     return WorkSession.fromMap(rows.first);
   }
 
-  /// Elimina una sesión y sus pausas/QR asociados.
+  /// Elimina una sesión y sus pausas/QR/Ubicaciones asociados.
   Future<void> cancelSession(int sessionId) async {
     final db = await _db;
     // Con FK + ON DELETE CASCADE no sería estrictamente necesario,
@@ -78,6 +78,8 @@ class WorkSessionDao {
         .delete('work_pauses', where: 'session_id = ?', whereArgs: [sessionId]);
     await db
         .delete('qr_scans', where: 'session_id = ?', whereArgs: [sessionId]);
+    await db.delete('session_locations',
+        where: 'session_id = ?', whereArgs: [sessionId]);
     await db.delete('work_sessions', where: 'id = ?', whereArgs: [sessionId]);
   }
 
@@ -181,6 +183,45 @@ class WorkSessionDao {
     );
   }
 
+  // ----------------- UBICACIONES (NEW) -----------------
+
+  /// Inserta un log de ubicación (lat/lon/accuracy en metros) asociado a la sesión.
+  Future<void> insertLocationLog({
+    required int sessionId,
+    required double lat,
+    required double lon,
+    required double accuracy,
+    required DateTime at,
+  }) async {
+    final db = await _db;
+    await db.insert('session_locations', {
+      'session_id': sessionId,
+      'lat': lat,
+      'lon': lon,
+      'accuracy': accuracy,
+      'at': at.millisecondsSinceEpoch,
+    });
+  }
+
+  /// Devuelve ubicaciones de una sesión (más recientes primero).
+  Future<List<Map<String, Object?>>> getLocationsBySession(
+      int sessionId) async {
+    final db = await _db;
+    return db.query(
+      'session_locations',
+      where: 'session_id = ?',
+      whereArgs: [sessionId],
+      orderBy: 'at DESC',
+    );
+  }
+
+  /// Elimina ubicaciones de una sesión (útil para limpieza puntual).
+  Future<int> deleteLocationsBySession(int sessionId) async {
+    final db = await _db;
+    return db.delete('session_locations',
+        where: 'session_id = ?', whereArgs: [sessionId]);
+  }
+
   // ----------------- QR SCANS -----------------
   Future<int> insertQrScan({
     required int sessionId,
@@ -216,24 +257,32 @@ class WorkSessionDao {
     final s = await db.query('work_sessions', orderBy: 'id DESC');
     // ignore: avoid_print
     print('--- work_sessions ---');
-    // ignore: avoid_print
     for (final r in s) {
+      // ignore: avoid_print
       print(r);
     }
 
     final p = await db.query('work_pauses', orderBy: 'id DESC');
     // ignore: avoid_print
     print('--- work_pauses ---');
-    // ignore: avoid_print
     for (final r in p) {
+      // ignore: avoid_print
       print(r);
     }
 
     final q = await db.query('qr_scans', orderBy: 'id DESC');
     // ignore: avoid_print
     print('--- qr_scans ---');
-    // ignore: avoid_print
     for (final r in q) {
+      // ignore: avoid_print
+      print(r);
+    }
+
+    final l = await db.query('session_locations', orderBy: 'at DESC');
+    // ignore: avoid_print
+    print('--- session_locations ---');
+    for (final r in l) {
+      // ignore: avoid_print
       print(r);
     }
   }

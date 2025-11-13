@@ -14,7 +14,7 @@ class AppDatabase {
 
     _instance = await openDatabase(
       dbPath,
-      version: 3, // esquema actual
+      version: 4, // ⬆️ Nueva versión de esquema (agrega session_locations)
       onConfigure: (db) async {
         // Algunos PRAGMA devuelven fila => usar rawQuery (no execute)
         try {
@@ -77,6 +77,26 @@ class AppDatabase {
         await db.execute(
           'CREATE INDEX IF NOT EXISTS idx_qr_scans_session ON qr_scans(session_id);',
         );
+
+        // ✅ Nueva tabla para logs de ubicación
+        await db.execute('''
+          CREATE TABLE session_locations (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            session_id INTEGER NOT NULL,
+            lat REAL NOT NULL,
+            lon REAL NOT NULL,
+            accuracy REAL NOT NULL,
+            at INTEGER NOT NULL,
+            FOREIGN KEY(session_id) REFERENCES work_sessions(id) ON DELETE CASCADE
+          );
+        ''');
+
+        await db.execute(
+          'CREATE INDEX IF NOT EXISTS idx_session_locations_session ON session_locations(session_id);',
+        );
+        await db.execute(
+          'CREATE INDEX IF NOT EXISTS idx_session_locations_at ON session_locations(at DESC);',
+        );
       },
 
       // ─────────── MIGRACIONES ───────────
@@ -119,6 +139,27 @@ class AppDatabase {
           ''');
           await db.execute(
             'CREATE INDEX IF NOT EXISTS idx_qr_scans_session ON qr_scans(session_id);',
+          );
+        }
+
+        // ⬆️ Migración a v4: crea tabla de ubicaciones e índices
+        if (oldV < 4) {
+          await db.execute('''
+            CREATE TABLE IF NOT EXISTS session_locations (
+              id INTEGER PRIMARY KEY AUTOINCREMENT,
+              session_id INTEGER NOT NULL,
+              lat REAL NOT NULL,
+              lon REAL NOT NULL,
+              accuracy REAL NOT NULL,
+              at INTEGER NOT NULL,
+              FOREIGN KEY(session_id) REFERENCES work_sessions(id) ON DELETE CASCADE
+            );
+          ''');
+          await db.execute(
+            'CREATE INDEX IF NOT EXISTS idx_session_locations_session ON session_locations(session_id);',
+          );
+          await db.execute(
+            'CREATE INDEX IF NOT EXISTS idx_session_locations_at ON session_locations(at DESC);',
           );
         }
       },

@@ -1,12 +1,31 @@
+<?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
     package="com.example.hm_innova_app">
 
-    <!-- ✅ Permiso requerido desde Android 13+ para mostrar notificaciones -->
+    <!-- Notificaciones (Android 13+) -->
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
 
+    <!-- Ubicación (primer plano y precisión) -->
+    <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
+    <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
+
+    <!-- Ubicación en segundo plano (Android 10+) -->
+    <uses-permission android:name="android.permission.ACCESS_BACKGROUND_LOCATION" />
+
+    <!-- Servicios en primer plano (Android 9+) -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <!-- Android 14+: permiso específico para servicios de ubicación en foreground -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_LOCATION" />
+
+    <!-- Mantener CPU despierta para tareas en background -->
+    <uses-permission android:name="android.permission.WAKE_LOCK" />
+
+    <!-- Opcional: reinicio tras boot si luego lo implementas -->
+    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
+
     <application
-        android:label="hm_innova_app"
         android:name="${applicationName}"
+        android:label="hm_innova_app"
         android:icon="@mipmap/ic_launcher">
 
         <activity
@@ -29,6 +48,12 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
+
+        <!-- Servicio requerido por flutter_foreground_task para ejecución en primer plano -->
+        <service
+            android:name="com.pravera.flutter_foreground_task.service.ForegroundService"
+            android:exported="false"
+            android:foregroundServiceType="location" />
 
         <!-- Obligatorio para el embedding v2 de Flutter -->
         <meta-data
