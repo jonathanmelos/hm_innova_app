@@ -5,7 +5,6 @@ import 'package:sqflite/sqflite.dart';
 class AppDatabase {
   static Database? _instance;
 
-  /// Obtiene (o crea) la instancia única de la base de datos.
   static Future<Database> get instance async {
     if (_instance != null) return _instance!;
 
@@ -14,9 +13,8 @@ class AppDatabase {
 
     _instance = await openDatabase(
       dbPath,
-      version: 4, // ⬆️ Nueva versión de esquema (agrega session_locations)
+      version: 5, // ⬆️ Subido por nueva migración synced/remote_id
       onConfigure: (db) async {
-        // Algunos PRAGMA devuelven fila => usar rawQuery (no execute)
         try {
           await db.rawQuery('PRAGMA foreign_keys = ON');
         } catch (_) {}
@@ -28,7 +26,6 @@ class AppDatabase {
         } catch (_) {}
       },
 
-      // ─────────── CREACIÓN INICIAL ───────────
       onCreate: (db, version) async {
         await db.execute('''
           CREATE TABLE work_sessions (
@@ -40,7 +37,9 @@ class AppDatabase {
             selfie_start TEXT,
             selfie_end   TEXT,
             photo_start  TEXT,
-            photo_end    TEXT
+            photo_end    TEXT,
+            remote_id    INTEGER,
+            synced       INTEGER NOT NULL DEFAULT 0
           );
         ''');
 
@@ -57,7 +56,6 @@ class AppDatabase {
             FOREIGN KEY(session_id) REFERENCES work_sessions(id) ON DELETE CASCADE
           );
         ''');
-
         await db.execute(
           'CREATE INDEX IF NOT EXISTS idx_pause_active ON work_pauses(session_id, end_at);',
         );
@@ -73,12 +71,10 @@ class AppDatabase {
             FOREIGN KEY(session_id) REFERENCES work_sessions(id) ON DELETE CASCADE
           );
         ''');
-
         await db.execute(
           'CREATE INDEX IF NOT EXISTS idx_qr_scans_session ON qr_scans(session_id);',
         );
 
-        // ✅ Nueva tabla para logs de ubicación
         await db.execute('''
           CREATE TABLE session_locations (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -87,10 +83,11 @@ class AppDatabase {
             lon REAL NOT NULL,
             accuracy REAL NOT NULL,
             at INTEGER NOT NULL,
+            synced INTEGER NOT NULL DEFAULT 0,
+            remote_id INTEGER,
             FOREIGN KEY(session_id) REFERENCES work_sessions(id) ON DELETE CASCADE
           );
         ''');
-
         await db.execute(
           'CREATE INDEX IF NOT EXISTS idx_session_locations_session ON session_locations(session_id);',
         );
@@ -99,7 +96,6 @@ class AppDatabase {
         );
       },
 
-      // ─────────── MIGRACIONES ───────────
       onUpgrade: (db, oldV, newV) async {
         if (oldV < 2) {
           await db.execute('''
@@ -118,13 +114,17 @@ class AppDatabase {
 
         if (oldV < 3) {
           await db.execute(
-              "ALTER TABLE work_sessions ADD COLUMN selfie_start TEXT;");
+            "ALTER TABLE work_sessions ADD COLUMN selfie_start TEXT;",
+          );
           await db.execute(
-              "ALTER TABLE work_sessions ADD COLUMN selfie_end   TEXT;");
+            "ALTER TABLE work_sessions ADD COLUMN selfie_end   TEXT;",
+          );
           await db.execute(
-              "ALTER TABLE work_sessions ADD COLUMN photo_start  TEXT;");
+            "ALTER TABLE work_sessions ADD COLUMN photo_start  TEXT;",
+          );
           await db.execute(
-              "ALTER TABLE work_sessions ADD COLUMN photo_end    TEXT;");
+            "ALTER TABLE work_sessions ADD COLUMN photo_end    TEXT;",
+          );
 
           await db.execute('''
             CREATE TABLE IF NOT EXISTS qr_scans (
@@ -142,7 +142,6 @@ class AppDatabase {
           );
         }
 
-        // ⬆️ Migración a v4: crea tabla de ubicaciones e índices
         if (oldV < 4) {
           await db.execute('''
             CREATE TABLE IF NOT EXISTS session_locations (
@@ -162,13 +161,27 @@ class AppDatabase {
             'CREATE INDEX IF NOT EXISTS idx_session_locations_at ON session_locations(at DESC);',
           );
         }
+
+        if (oldV < 5) {
+          await db.execute(
+            "ALTER TABLE work_sessions ADD COLUMN remote_id INTEGER;",
+          );
+          await db.execute(
+            "ALTER TABLE work_sessions ADD COLUMN synced INTEGER NOT NULL DEFAULT 0;",
+          );
+          await db.execute(
+            "ALTER TABLE session_locations ADD COLUMN synced INTEGER NOT NULL DEFAULT 0;",
+          );
+          await db.execute(
+            "ALTER TABLE session_locations ADD COLUMN remote_id INTEGER;",
+          );
+        }
       },
     );
 
     return _instance!;
   }
 
-  /// Cierra la conexión (útil en tests o cuando cambias de usuario).
   static Future<void> close() async {
     if (_instance != null) {
       await _instance!.close();
@@ -176,7 +189,6 @@ class AppDatabase {
     }
   }
 
-  /// ⚠️ Solo para desarrollo: elimina el archivo de la BD y reinicia.
   static Future<void> destroyForDev() async {
     await close();
     final docs = await getApplicationDocumentsDirectory();

@@ -2,6 +2,9 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
     package="com.example.hm_innova_app">
 
+    <!-- Permiso de Internet para sincronizar con Laravel -->
+    <uses-permission android:name="android.permission.INTERNET" />
+
     <!-- Notificaciones (Android 13+) -->
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
 

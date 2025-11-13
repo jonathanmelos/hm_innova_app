@@ -13,6 +13,11 @@ import '../state/attendance_controller.dart';
 import '../state/attendance_state.dart';
 import '../widgets/timer_display.dart';
 
+// ⬇️ NUEVO: compact widget de sincronización
+import '../widgets/sync_inline.dart';
+// ⬇️ NUEVO: para disparar sync desde el AppBar
+import '../sync_service.dart';
+
 class HomePage extends StatefulWidget {
   const HomePage({super.key});
 
@@ -156,9 +161,7 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
     if (!await folder.exists()) await folder.create(recursive: true);
 
     final ts = DateTime.now().millisecondsSinceEpoch;
-    final ext = p.extension(file.path).isEmpty
-        ? '.jpg'
-        : p.extension(file.path);
+    final ext = p.extension(file.path).isEmpty ? '.jpg' : p.extension(file.path);
     final dest = p.join(folder.path, '$prefix-$ts$ext');
     await File(file.path).copy(dest);
     return dest;
@@ -172,9 +175,7 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
       return picker
           .pickImage(
             source: ImageSource.camera,
-            preferredCameraDevice: front
-                ? CameraDevice.front
-                : CameraDevice.rear,
+            preferredCameraDevice: front ? CameraDevice.front : CameraDevice.rear,
             imageQuality: 85,
           )
           .timeout(const Duration(seconds: 25));
@@ -227,9 +228,7 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
         context: context,
         builder: (_) => AlertDialog(
           title: const Text('Selfie de inicio'),
-          content: const Text(
-            'Tómate un selfie para registrar tu inicio de jornada.',
-          ),
+          content: const Text('Tómate un selfie para registrar tu inicio de jornada.'),
           actions: [
             TextButton(
               onPressed: () => Navigator.pop(context),
@@ -319,6 +318,21 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
       SessionStatus.stopped => 'Jornada finalizada',
     };
 
+    Future<void> _syncFromAppBar() async {
+      try {
+        await SyncService.syncIfConnected();
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Sincronización completada.')),
+        );
+      } catch (e) {
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Error al sincronizar: $e')),
+        );
+      }
+    }
+
     Widget buildActions() {
       if (state.status == SessionStatus.idle) {
         return ConstrainedBox(
@@ -351,9 +365,8 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
                 label: const Text('Escanear QR de obra'),
                 onPressed: () async {
                   if (!mounted) return;
-                  await Navigator.of(
-                    context,
-                  ).push(MaterialPageRoute(builder: (_) => const QrScanPage()));
+                  await Navigator.of(context)
+                      .push(MaterialPageRoute(builder: (_) => const QrScanPage()));
                 },
               ),
             ),
@@ -394,9 +407,8 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
                 label: const Text('Escanear QR de obra'),
                 onPressed: () async {
                   if (!mounted) return;
-                  await Navigator.of(
-                    context,
-                  ).push(MaterialPageRoute(builder: (_) => const QrScanPage()));
+                  await Navigator.of(context)
+                      .push(MaterialPageRoute(builder: (_) => const QrScanPage()));
                 },
               ),
             ),
@@ -434,12 +446,15 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
               const SizedBox(height: 10),
               TimerDisplay(elapsed: state.elapsed),
               const SizedBox(height: 8),
-              Text(switch (state.status) {
-                SessionStatus.running => 'Contando…',
-                SessionStatus.paused => 'Pausado',
-                SessionStatus.idle => '00:00:00',
-                SessionStatus.stopped => 'Tiempo total',
-              }, style: Theme.of(context).textTheme.bodyMedium),
+              Text(
+                switch (state.status) {
+                  SessionStatus.running => 'Contando…',
+                  SessionStatus.paused => 'Pausado',
+                  SessionStatus.idle => '00:00:00',
+                  SessionStatus.stopped => 'Tiempo total',
+                },
+                style: Theme.of(context).textTheme.bodyMedium,
+              ),
               if (state.startAt != null) ...[
                 const SizedBox(height: 10),
                 Text(
@@ -458,9 +473,7 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
         return AnimatedAlign(
           duration: _flyDuration,
           curve: Curves.easeInOut,
-          alignment: _flyToCorner
-              ? const Alignment(-0.98, -0.92)
-              : Alignment.center,
+          alignment: _flyToCorner ? const Alignment(-0.98, -0.92) : Alignment.center,
           child: AnimatedScale(
             duration: _flyDuration,
             curve: Curves.easeInOut,
@@ -487,6 +500,13 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
             );
           },
         ),
+        actions: [
+          IconButton(
+            tooltip: 'Sincronizar ahora',
+            icon: const Icon(Icons.sync),
+            onPressed: _syncFromAppBar,
+          ),
+        ],
       ),
       body: SafeArea(
         child: Padding(
@@ -507,6 +527,11 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
                 style: Theme.of(context).textTheme.titleLarge,
                 textAlign: TextAlign.center,
               ),
+
+              // ⬇️ NUEVO: widget compacto de sincronización
+              const SizedBox(height: 8),
+              const SyncInline(mini: true),
+
               const Spacer(),
               SizedBox(height: 320, child: buildSummaryCard()),
               const Spacer(),

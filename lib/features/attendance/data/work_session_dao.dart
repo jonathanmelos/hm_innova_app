@@ -7,8 +7,6 @@ class WorkSessionDao {
 
   // ----------------- SESIONES -----------------
 
-  /// Crea una sesión en estado "running".
-  /// Permite guardar inmediatamente la selfie y/o foto de contexto inicial.
   Future<int> insertRunning(
     DateTime start, {
     String? selfieStart,
@@ -24,10 +22,10 @@ class WorkSessionDao {
       'selfie_end': null,
       'photo_start': photoStart,
       'photo_end': null,
+      'synced': 0, // Columna agregada para control de sincronización
     });
   }
 
-  /// Finaliza una sesión y opcionalmente registra la selfie/foto final.
   Future<void> finishSession({
     required int id,
     required DateTime end,
@@ -44,6 +42,7 @@ class WorkSessionDao {
         'status': 'stopped',
         if (selfieEnd != null) 'selfie_end': selfieEnd,
         if (photoEnd != null) 'photo_end': photoEnd,
+        'synced': 0, // Asegurar que se vuelva a sincronizar
       },
       where: 'id = ?',
       whereArgs: [id],
@@ -69,21 +68,31 @@ class WorkSessionDao {
     return WorkSession.fromMap(rows.first);
   }
 
-  /// Elimina una sesión y sus pausas/QR/Ubicaciones asociados.
+  Future<List<WorkSession>> getLastN(int days) async {
+    final db = await _db;
+    if (days >= 9999) {
+      final rows = await db.query('work_sessions', orderBy: 'start_at DESC');
+      return rows.map(WorkSession.fromMap).toList();
+    }
+    final cutoff =
+        DateTime.now().subtract(Duration(days: days)).millisecondsSinceEpoch;
+    final rows = await db.query(
+      'work_sessions',
+      where: 'start_at > ?',
+      whereArgs: [cutoff],
+      orderBy: 'start_at DESC',
+    );
+    return rows.map(WorkSession.fromMap).toList();
+  }
+
   Future<void> cancelSession(int sessionId) async {
     final db = await _db;
-    // Con FK + ON DELETE CASCADE no sería estrictamente necesario,
-    // pero lo hacemos explícito por robustez.
-    await db
-        .delete('work_pauses', where: 'session_id = ?', whereArgs: [sessionId]);
-    await db
-        .delete('qr_scans', where: 'session_id = ?', whereArgs: [sessionId]);
-    await db.delete('session_locations',
-        where: 'session_id = ?', whereArgs: [sessionId]);
+    await db.delete('work_pauses', where: 'session_id = ?', whereArgs: [sessionId]);
+    await db.delete('qr_scans', where: 'session_id = ?', whereArgs: [sessionId]);
+    await db.delete('session_locations', where: 'session_id = ?', whereArgs: [sessionId]);
     await db.delete('work_sessions', where: 'id = ?', whereArgs: [sessionId]);
   }
 
-  /// Si existe una sesión activa (end_at NULL), la elimina.
   Future<void> cancelActiveIfAny() async {
     final db = await _db;
     final rows = await db.query(
@@ -99,6 +108,7 @@ class WorkSessionDao {
   }
 
   // ----------------- PAUSAS -----------------
+
   Future<int> startPause(int sessionId, DateTime start) async {
     final db = await _db;
     return db.insert('work_pauses', {
@@ -142,7 +152,8 @@ class WorkSessionDao {
     return (total ?? 0).toInt();
   }
 
-  // ----------------- MEDIA (FOTOS / SELFIES) -----------------
+  // ----------------- MEDIA -----------------
+
   Future<void> setSelfieStart(int sessionId, String filePath) async {
     final db = await _db;
     await db.update(
@@ -183,9 +194,8 @@ class WorkSessionDao {
     );
   }
 
-  // ----------------- UBICACIONES (NEW) -----------------
+  // ----------------- UBICACIONES -----------------
 
-  /// Inserta un log de ubicación (lat/lon/accuracy en metros) asociado a la sesión.
   Future<void> insertLocationLog({
     required int sessionId,
     required double lat,
@@ -200,29 +210,42 @@ class WorkSessionDao {
       'lon': lon,
       'accuracy': accuracy,
       'at': at.millisecondsSinceEpoch,
+      'synced': 0,
     });
   }
 
-  /// Devuelve ubicaciones de una sesión (más recientes primero).
-  Future<List<Map<String, Object?>>> getLocationsBySession(
-      int sessionId) async {
+  Future<void> markSessionAsSynced(int id) async {
     final db = await _db;
-    return db.query(
-      'session_locations',
-      where: 'session_id = ?',
-      whereArgs: [sessionId],
-      orderBy: 'at DESC',
-    );
+    await db.update('work_sessions', {'synced': 1}, where: 'id = ?', whereArgs: [id]);
   }
 
-  /// Elimina ubicaciones de una sesión (útil para limpieza puntual).
+  Future<void> markLocationsAsSynced(int sessionId) async {
+    final db = await _db;
+    await db.update('session_locations', {'synced': 1}, where: 'session_id = ? AND synced = 0', whereArgs: [sessionId]);
+  }
+
+  Future<List<Map<String, Object?>>> getUnsyncedSessions() async {
+    final db = await _db;
+    return db.query('work_sessions', where: 'synced = 0 AND end_at IS NOT NULL', orderBy: 'id ASC');
+  }
+
+  Future<List<Map<String, Object?>>> getUnsyncedLocations() async {
+    final db = await _db;
+    return db.query('session_locations', where: 'synced = 0', orderBy: 'at ASC');
+  }
+
+  Future<List<Map<String, Object?>>> getLocationsBySession(int sessionId) async {
+    final db = await _db;
+    return db.query('session_locations', where: 'session_id = ?', whereArgs: [sessionId], orderBy: 'at DESC');
+  }
+
   Future<int> deleteLocationsBySession(int sessionId) async {
     final db = await _db;
-    return db.delete('session_locations',
-        where: 'session_id = ?', whereArgs: [sessionId]);
+    return db.delete('session_locations', where: 'session_id = ?', whereArgs: [sessionId]);
   }
 
-  // ----------------- QR SCANS -----------------
+  // ----------------- QR -----------------
+
   Future<int> insertQrScan({
     required int sessionId,
     String? projectCode,
@@ -242,65 +265,27 @@ class WorkSessionDao {
 
   Future<List<Map<String, Object?>>> getQrScansBySession(int sessionId) async {
     final db = await _db;
-    return db.query(
-      'qr_scans',
-      where: 'session_id = ?',
-      whereArgs: [sessionId],
-      orderBy: 'scanned_at DESC',
-    );
+    return db.query('qr_scans', where: 'session_id = ?', whereArgs: [sessionId], orderBy: 'scanned_at DESC');
   }
 
-  // ----------------- CONSULTAS / DEBUG -----------------
+  // ----------------- DEBUG -----------------
+
   Future<void> debugPrintAll() async {
     final db = await _db;
-
     final s = await db.query('work_sessions', orderBy: 'id DESC');
-    // ignore: avoid_print
     print('--- work_sessions ---');
-    for (final r in s) {
-      // ignore: avoid_print
-      print(r);
-    }
+    for (final r in s) print(r);
 
     final p = await db.query('work_pauses', orderBy: 'id DESC');
-    // ignore: avoid_print
     print('--- work_pauses ---');
-    for (final r in p) {
-      // ignore: avoid_print
-      print(r);
-    }
+    for (final r in p) print(r);
 
     final q = await db.query('qr_scans', orderBy: 'id DESC');
-    // ignore: avoid_print
     print('--- qr_scans ---');
-    for (final r in q) {
-      // ignore: avoid_print
-      print(r);
-    }
+    for (final r in q) print(r);
 
     final l = await db.query('session_locations', orderBy: 'at DESC');
-    // ignore: avoid_print
     print('--- session_locations ---');
-    for (final r in l) {
-      // ignore: avoid_print
-      print(r);
-    }
-  }
-
-  Future<List<WorkSession>> getLastN(int days) async {
-    final db = await _db;
-    if (days >= 9999) {
-      final rows = await db.query('work_sessions', orderBy: 'start_at DESC');
-      return rows.map(WorkSession.fromMap).toList();
-    }
-    final cutoff =
-        DateTime.now().subtract(Duration(days: days)).millisecondsSinceEpoch;
-    final rows = await db.query(
-      'work_sessions',
-      where: 'start_at > ?',
-      whereArgs: [cutoff],
-      orderBy: 'start_at DESC',
-    );
-    return rows.map(WorkSession.fromMap).toList();
+    for (final r in l) print(r);
   }
 }

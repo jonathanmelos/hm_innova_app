@@ -1,50 +1,45 @@
+// lib/main.dart
 import 'package:flutter/material.dart';
-import 'app.dart';
-
-// Fechas e internacionalización
-import 'package:intl/date_symbol_data_local.dart';
-
-// Notificaciones / TZ
-import 'package:timezone/data/latest.dart' as tzdata;
-import 'package:timezone/timezone.dart' as tz;
-import 'core/notifications/notification_service.dart';
-
-// Foreground Service (ubicación en segundo plano)
 import 'package:flutter_foreground_task/flutter_foreground_task.dart';
-import 'features/attendance/bg_location_task.dart'; // handler del servicio
+
+// ⬇️ Localización / formateo de fechas
+import 'package:intl/intl.dart';
+import 'package:intl/date_symbol_data_local.dart';
+import 'package:flutter_localizations/flutter_localizations.dart';
+
+import 'features/attendance/bg_location_task.dart';
+// (No es obligatorio importar sync_service.dart aquí)
+import 'features/attendance/presentation/app.dart'; // Debe exportar HmInnovaApp
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
 
-  // (Solo para escritorio usaríamos sqflite_common_ffi; en Android/iOS no hace falta)
-
-  // Locale ES
+  // Inicializa datos de fecha en español
+  Intl.defaultLocale = 'es';
   await initializeDateFormatting('es');
 
-  // Zona horaria local (Ecuador: America/Guayaquil)
-  tzdata.initializeTimeZones();
-  tz.setLocalLocation(tz.getLocation('America/Guayaquil'));
-
-  // Inicializa opciones del servicio en primer plano (notificación persistente)
+  // En esta versión del plugin, init() NO es const.
   FlutterForegroundTask.init(
     androidNotificationOptions: AndroidNotificationOptions(
-      channelId: 'workday_channel_id',
-      channelName: 'Jornada activa',
-      channelDescription: 'Registro de ubicación en segundo plano',
+      channelId: 'hm_innova_fg',
+      channelName: 'HM INNOVA Asistencia',
+      channelDescription:
+          'Registro de ubicación y sincronización en segundo plano',
       channelImportance: NotificationChannelImportance.LOW,
       priority: NotificationPriority.LOW,
-      iconData: const NotificationIconData(
+      iconData: NotificationIconData(
         resType: ResourceType.mipmap,
         resPrefix: ResourcePrefix.ic,
-        name: 'launcher', // usa tu mipmap/ic_launcher
+        name: 'launcher',
       ),
+      buttons: [NotificationButton(id: 'open', text: 'Abrir')],
     ),
     iosNotificationOptions: const IOSNotificationOptions(
       showNotification: true,
       playSound: false,
     ),
     foregroundTaskOptions: const ForegroundTaskOptions(
-      interval: 3600000, // 60 min en milisegundos
+      interval: 300000, // 5 min entre eventos de onEvent()
       isOnceEvent: false,
       autoRunOnBoot: false,
       allowWakeLock: true,
@@ -52,17 +47,47 @@ Future<void> main() async {
     ),
   );
 
-  // Notificaciones locales propias de la app
-  final notis = NotificationService.instance;
-  await notis.init();
-  await notis.ensurePermissionOnAndroid13();
-  await notis.scheduleMorningPlan();
+  // startService() puede devolver Future<bool>?; si tu analizador se queja,
+  // elimina el 'await' de esta línea.
+  await FlutterForegroundTask.startService(
+    notificationTitle: 'HM INNOVA en ejecución',
+    notificationText: 'Registrando ubicación y sincronizando.',
+    callback: startForegroundCallback,
+  );
 
-  runApp(const WithForegroundTask(child: HmInnovaApp()));
+  runApp(const MyApp());
 }
 
-/// Entry-point del Foreground Service (lo llamarás al iniciar la jornada).
 @pragma('vm:entry-point')
 void startForegroundCallback() {
   FlutterForegroundTask.setTaskHandler(BgLocationTask());
+}
+
+class MyApp extends StatelessWidget {
+  const MyApp({super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    // ¡No uses const en WithForegroundTask!
+    return WithForegroundTask(
+      child: MaterialApp(
+        title: 'HM INNOVA Asistencia',
+        debugShowCheckedModeBanner: false,
+        theme: ThemeData(
+          useMaterial3: true,
+          colorScheme: ColorScheme.fromSeed(seedColor: Colors.blue),
+        ),
+        // ⬇️ Localización activada
+        locale: const Locale('es'),
+        supportedLocales: const [Locale('es'), Locale('en')],
+        localizationsDelegates: const [
+          GlobalMaterialLocalizations.delegate,
+          GlobalWidgetsLocalizations.delegate,
+          GlobalCupertinoLocalizations.delegate,
+        ],
+        // Tu pantalla con cronómetro/botones/historial
+        home: const HmInnovaApp(),
+      ),
+    );
+  }
 }

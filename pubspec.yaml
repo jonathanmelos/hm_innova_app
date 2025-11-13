@@ -22,7 +22,7 @@ dependencies:
   path: ^1.9.0
   path_provider: ^2.1.3
 
-  # Fechas e internacionalización (alineado con el SDK)
+  # Fechas e internacionalización
   intl: ^0.20.2
   timezone: ^0.10.0
 
@@ -31,13 +31,16 @@ dependencies:
   mobile_scanner: ^6.0.2
   permission_handler: ^11.3.1
 
-  # Notificaciones locales
+  # Notificaciones y ubicación
   flutter_local_notifications: ^19.5.0
-
-  # Ubicación + servicio en segundo plano
   geolocator: ^11.1.0
   flutter_foreground_task: ^6.1.2
 
+  # 🔁 NUEVOS: sincronización, red e HTTP
+  connectivity_plus: ^6.0.3
+  http: ^1.2.1
+  shared_preferences: ^2.5.3
+ 
 dev_dependencies:
   flutter_test:
     sdk: flutter

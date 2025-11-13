@@ -1,5 +1,7 @@
+// lib/features/attendance/presentation/history_page.dart
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
+
 import '../data/work_session_dao.dart';
 import '../data/work_session_model.dart';
 
@@ -11,7 +13,9 @@ class HistoryPage extends StatefulWidget {
 }
 
 class _HistoryPageState extends State<HistoryPage> {
-  final WorkSessionDao _dao = WorkSessionDao();
+  final _dao = WorkSessionDao();
+  final _now = DateTime.now();
+
   List<WorkSession> _sessions = [];
   int _filterDays = 30; // 7 / 30 / 9999
   bool _loading = true;
@@ -23,21 +27,29 @@ class _HistoryPageState extends State<HistoryPage> {
   }
 
   Future<void> _loadSessions() async {
-    final now = DateTime.now();
     final all = await _dao.getLastN(_filterDays);
-    setState(() {
-      _sessions = all.where((s) {
-        if (s.startAt.isAfter(now.subtract(Duration(days: _filterDays)))) {
-          return true;
-        }
-        return false;
-      }).toList();
-      _loading = false;
-    });
+
+    // Filtra y ordena (más recientes primero)
+    final cutoff = _now.subtract(Duration(days: _filterDays));
+    _sessions = all.where((s) => s.startAt.isAfter(cutoff)).toList()
+      ..sort((a, b) => b.startAt.compareTo(a.startAt));
+
+    if (mounted) setState(() => _loading = false);
   }
 
-  String _fmt(DateTime d) =>
+  // Formato seguro en ES (requiere initializeDateFormatting('es') en main.dart)
+  String _fmtFull(DateTime d) =>
       DateFormat('EEE d MMM yyyy, HH:mm', 'es').format(d);
+
+  String _fmtHour(DateTime d) => DateFormat('HH:mm', 'es').format(d);
+
+  String _fmtDuration(int seconds) {
+    if (seconds <= 0) return '00 h 00 min';
+    final dur = Duration(seconds: seconds);
+    final h = dur.inHours.toString().padLeft(2, '0');
+    final m = (dur.inMinutes % 60).toString().padLeft(2, '0');
+    return '$h h $m min';
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -47,12 +59,13 @@ class _HistoryPageState extends State<HistoryPage> {
         actions: [
           PopupMenuButton<int>(
             icon: const Icon(Icons.filter_list),
-            onSelected: (v) {
+            initialValue: _filterDays,
+            onSelected: (v) async {
               setState(() {
                 _filterDays = v;
                 _loading = true;
               });
-              _loadSessions();
+              await _loadSessions();
             },
             itemBuilder: (context) => const [
               PopupMenuItem(value: 7, child: Text('Últimos 7 días')),
@@ -65,30 +78,65 @@ class _HistoryPageState extends State<HistoryPage> {
       body: _loading
           ? const Center(child: CircularProgressIndicator())
           : _sessions.isEmpty
-              ? const Center(child: Text('No hay jornadas registradas.'))
-              : ListView.builder(
-                  padding: const EdgeInsets.all(16),
-                  itemCount: _sessions.length,
-                  itemBuilder: (context, i) {
-                    final s = _sessions[i];
-                    final dur = Duration(seconds: s.totalSeconds);
-                    final h = dur.inHours.toString().padLeft(2, '0');
-                    final m =
-                        dur.inMinutes.remainder(60).toString().padLeft(2, '0');
-                    return Card(
-                      margin: const EdgeInsets.only(bottom: 12),
-                      shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(16)),
-                      child: ListTile(
-                        title: Text(
-                            '${_fmt(s.startAt)} → ${s.endAt != null ? DateFormat('HH:mm').format(s.endAt!) : '—'}'),
-                        subtitle:
-                            Text('Duración: $h h $m min • Estado: ${s.status}'),
-                        leading: const Icon(Icons.work_history_outlined),
+          ? const Center(child: Text('No hay jornadas registradas.'))
+          : RefreshIndicator(
+              onRefresh: _loadSessions,
+              child: ListView.builder(
+                physics: const AlwaysScrollableScrollPhysics(),
+                padding: const EdgeInsets.all(16),
+                itemCount: _sessions.length,
+                itemBuilder: (context, i) {
+                  final s = _sessions[i];
+                  final endTxt = s.endAt != null ? _fmtHour(s.endAt!) : '—';
+                  final status = s.status; // running | paused | stopped
+
+                  IconData leadingIcon;
+                  Color? leadingColor;
+                  switch (status) {
+                    case 'running':
+                      leadingIcon = Icons.play_arrow_rounded;
+                      leadingColor = Colors.green.shade600;
+                      break;
+                    case 'paused':
+                      leadingIcon = Icons.pause_rounded;
+                      leadingColor = Colors.orange.shade700;
+                      break;
+                    case 'stopped':
+                      leadingIcon = Icons.stop_rounded;
+                      leadingColor = Colors.blue.shade700;
+                      break;
+                    default:
+                      leadingIcon = Icons.history_rounded;
+                      leadingColor = Theme.of(context).colorScheme.primary;
+                  }
+
+                  return Card(
+                    margin: const EdgeInsets.only(bottom: 12),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(16),
+                    ),
+                    child: ListTile(
+                      leading: CircleAvatar(
+                        backgroundColor: leadingColor.withOpacity(.12),
+                        foregroundColor: leadingColor,
+                        child: Icon(leadingIcon),
                       ),
-                    );
-                  },
-                ),
+                      title: Text(
+                        '${_fmtFull(s.startAt)} → $endTxt',
+                        maxLines: 2,
+                      ),
+                      subtitle: Text(
+                        'Duración: ${_fmtDuration(s.totalSeconds)} • Estado: $status',
+                      ),
+                      trailing: const Icon(Icons.chevron_right),
+                      onTap: () {
+                        // Aquí podrías abrir detalle de la jornada si lo implementas
+                      },
+                    ),
+                  );
+                },
+              ),
+            ),
     );
   }
 }
