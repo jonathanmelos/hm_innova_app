@@ -58,7 +58,7 @@ Future<void> main() async {
   await notis.ensurePermissionOnAndroid13();
   await notis.scheduleMorningPlan();
 
-  runApp(WithForegroundTask(child: const HmInnovaApp()));
+  runApp(const WithForegroundTask(child: HmInnovaApp()));
 }
 
 /// Entry-point del Foreground Service (lo llamarás al iniciar la jornada).
