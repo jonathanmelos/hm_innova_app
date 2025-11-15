@@ -8,8 +8,8 @@ import 'package:intl/date_symbol_data_local.dart';
 import 'package:flutter_localizations/flutter_localizations.dart';
 
 import 'features/attendance/bg_location_task.dart';
-// (No es obligatorio importar sync_service.dart aquí)
-import 'features/attendance/presentation/app.dart'; // Debe exportar HmInnovaApp
+import 'features/attendance/presentation/app.dart'; // HmInnovaApp
+import 'features/auth/presentation/auth_page.dart'; // ⬅️ NUEVO: AuthGate
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -18,7 +18,6 @@ Future<void> main() async {
   Intl.defaultLocale = 'es';
   await initializeDateFormatting('es');
 
-  // En esta versión del plugin, init() NO es const.
   FlutterForegroundTask.init(
     androidNotificationOptions: AndroidNotificationOptions(
       channelId: 'hm_innova_fg',
@@ -39,7 +38,7 @@ Future<void> main() async {
       playSound: false,
     ),
     foregroundTaskOptions: const ForegroundTaskOptions(
-      interval: 300000, // 5 min entre eventos de onEvent()
+      interval: 300000, // 5 min
       isOnceEvent: false,
       autoRunOnBoot: false,
       allowWakeLock: true,
@@ -47,8 +46,6 @@ Future<void> main() async {
     ),
   );
 
-  // startService() puede devolver Future<bool>?; si tu analizador se queja,
-  // elimina el 'await' de esta línea.
   await FlutterForegroundTask.startService(
     notificationTitle: 'HM INNOVA en ejecución',
     notificationText: 'Registrando ubicación y sincronizando.',
@@ -77,7 +74,6 @@ class MyApp extends StatelessWidget {
           useMaterial3: true,
           colorScheme: ColorScheme.fromSeed(seedColor: Colors.blue),
         ),
-        // ⬇️ Localización activada
         locale: const Locale('es'),
         supportedLocales: const [Locale('es'), Locale('en')],
         localizationsDelegates: const [
@@ -85,8 +81,9 @@ class MyApp extends StatelessWidget {
           GlobalWidgetsLocalizations.delegate,
           GlobalCupertinoLocalizations.delegate,
         ],
-        // Tu pantalla con cronómetro/botones/historial
-        home: const HmInnovaApp(),
+        // ⬇️ ANTES: home: const HmInnovaApp(),
+        // AHORA: protegemos con el gate de autenticación
+        home: const AuthGate(),
       ),
     );
   }

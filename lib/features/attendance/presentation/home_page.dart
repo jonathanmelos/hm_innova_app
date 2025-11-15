@@ -7,6 +7,9 @@ import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
 import 'package:permission_handler/permission_handler.dart';
 
+// ⬇️ NUEVO: perfil del técnico
+import 'package:hm_innova_app/features/auth/presentation/technician_profile_page.dart';
+
 import 'history_page.dart';
 import 'qr_scan_page.dart';
 import '../state/attendance_controller.dart';
@@ -161,7 +164,9 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
     if (!await folder.exists()) await folder.create(recursive: true);
 
     final ts = DateTime.now().millisecondsSinceEpoch;
-    final ext = p.extension(file.path).isEmpty ? '.jpg' : p.extension(file.path);
+    final ext = p.extension(file.path).isEmpty
+        ? '.jpg'
+        : p.extension(file.path);
     final dest = p.join(folder.path, '$prefix-$ts$ext');
     await File(file.path).copy(dest);
     return dest;
@@ -175,7 +180,9 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
       return picker
           .pickImage(
             source: ImageSource.camera,
-            preferredCameraDevice: front ? CameraDevice.front : CameraDevice.rear,
+            preferredCameraDevice: front
+                ? CameraDevice.front
+                : CameraDevice.rear,
             imageQuality: 85,
           )
           .timeout(const Duration(seconds: 25));
@@ -228,7 +235,9 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
         context: context,
         builder: (_) => AlertDialog(
           title: const Text('Selfie de inicio'),
-          content: const Text('Tómate un selfie para registrar tu inicio de jornada.'),
+          content: const Text(
+            'Tómate un selfie para registrar tu inicio de jornada.',
+          ),
           actions: [
             TextButton(
               onPressed: () => Navigator.pop(context),
@@ -327,9 +336,9 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
         );
       } catch (e) {
         if (!mounted) return;
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Error al sincronizar: $e')),
-        );
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text('Error al sincronizar: $e')));
       }
     }
 
@@ -365,8 +374,9 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
                 label: const Text('Escanear QR de obra'),
                 onPressed: () async {
                   if (!mounted) return;
-                  await Navigator.of(context)
-                      .push(MaterialPageRoute(builder: (_) => const QrScanPage()));
+                  await Navigator.of(
+                    context,
+                  ).push(MaterialPageRoute(builder: (_) => const QrScanPage()));
                 },
               ),
             ),
@@ -407,8 +417,9 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
                 label: const Text('Escanear QR de obra'),
                 onPressed: () async {
                   if (!mounted) return;
-                  await Navigator.of(context)
-                      .push(MaterialPageRoute(builder: (_) => const QrScanPage()));
+                  await Navigator.of(
+                    context,
+                  ).push(MaterialPageRoute(builder: (_) => const QrScanPage()));
                 },
               ),
             ),
@@ -446,15 +457,12 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
               const SizedBox(height: 10),
               TimerDisplay(elapsed: state.elapsed),
               const SizedBox(height: 8),
-              Text(
-                switch (state.status) {
-                  SessionStatus.running => 'Contando…',
-                  SessionStatus.paused => 'Pausado',
-                  SessionStatus.idle => '00:00:00',
-                  SessionStatus.stopped => 'Tiempo total',
-                },
-                style: Theme.of(context).textTheme.bodyMedium,
-              ),
+              Text(switch (state.status) {
+                SessionStatus.running => 'Contando…',
+                SessionStatus.paused => 'Pausado',
+                SessionStatus.idle => '00:00:00',
+                SessionStatus.stopped => 'Tiempo total',
+              }, style: Theme.of(context).textTheme.bodyMedium),
               if (state.startAt != null) ...[
                 const SizedBox(height: 10),
                 Text(
@@ -473,7 +481,9 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
         return AnimatedAlign(
           duration: _flyDuration,
           curve: Curves.easeInOut,
-          alignment: _flyToCorner ? const Alignment(-0.98, -0.92) : Alignment.center,
+          alignment: _flyToCorner
+              ? const Alignment(-0.98, -0.92)
+              : Alignment.center,
           child: AnimatedScale(
             duration: _flyDuration,
             curve: Curves.easeInOut,
@@ -501,6 +511,18 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
           },
         ),
         actions: [
+          IconButton(
+            tooltip: 'Perfil del técnico',
+            icon: const Icon(Icons.person_outline),
+            onPressed: () async {
+              if (!mounted) return;
+              await Navigator.of(context).push(
+                MaterialPageRoute(
+                  builder: (_) => const TechnicianProfilePage(),
+                ),
+              );
+            },
+          ),
           IconButton(
             tooltip: 'Sincronizar ahora',
             icon: const Icon(Icons.sync),

@@ -36,10 +36,14 @@ dependencies:
   geolocator: ^11.1.0
   flutter_foreground_task: ^6.1.2
 
-  # 🔁 NUEVOS: sincronización, red e HTTP
+  # 🔁 SINCRONIZACIÓN / RED
   connectivity_plus: ^6.0.3
   http: ^1.2.1
   shared_preferences: ^2.5.3
+
+  # 🔒 NUEVO: almacenamiento seguro para token Sanctum
+  flutter_secure_storage: ^9.0.0
+
  
 dev_dependencies:
   flutter_test:
