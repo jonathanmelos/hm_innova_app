@@ -48,7 +48,8 @@ class TechnicianProfileService {
 
     final body = profile.toJson();
 
-    final json = await _apiClient.post(
+    // ⬅️ CAMBIO CLAVE: usar PUT porque en Laravel la ruta es Route::put('/tecnico/profile', ...)
+    final json = await _apiClient.put(
       ApiEndpoints.tecnicoProfile,
       bearerToken: token,
       body: body,

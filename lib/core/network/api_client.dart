@@ -123,6 +123,30 @@ class ApiClient {
     return decodeOrThrow(resp);
   }
 
+  // 🔹 NUEVO: PUT JSON CON OPCIONAL bearerToken (para /tecnico/profile)
+  Future<Map<String, dynamic>> put(
+    String path, {
+    String? bearerToken,
+    Map<String, dynamic>? body,
+    Map<String, String>? headers,
+  }) async {
+    final uri = _buildUri(path);
+    final mergedHeaders = <String, String>{
+      'Accept': 'application/json',
+      'Content-Type': 'application/json',
+      if (bearerToken != null) 'Authorization': 'Bearer $bearerToken',
+      if (headers != null) ...headers,
+    };
+
+    final resp = await _client.put(
+      uri,
+      headers: mergedHeaders,
+      body: body != null ? jsonEncode(body) : null,
+    );
+    _logResponse('PUT', uri, resp);
+    return decodeOrThrow(resp);
+  }
+
   /// ========== POST JSON CON AUTENTICACIÓN (estilo antiguo) ==========
   ///
   /// Firma compatible con lo que te marca el error en `sync_repository.dart`:

@@ -191,30 +191,49 @@ class _TechnicianProfilePageState extends State<TechnicianProfilePage> {
   // ---------------- GUARDAR CAMBIOS ----------------
 
   Future<void> _save() async {
-    if (_profile == null) return;
-
     setState(() {
       _saving = true;
       _error = null;
     });
 
-    try {
-      final updated = TechnicianProfile(
-        id: _profile!.id,
-        userId: _profile!.userId,
-        cedula: _cedulaCtrl.text.trim(),
-        nombres: _nombresCtrl.text.trim(),
-        apellidos: _apellidosCtrl.text.trim(),
-        telefono: _telefonoCtrl.text.trim(),
-        correo: _correoCtrl.text.trim(),
-        direccion: _direccionCtrl.text.trim(),
-        tipoSangre: _tipoSangreCtrl.text.trim(),
-        contactoEmergencia: _contactoEmergenciaCtrl.text.trim(),
-        fotoPerfil: _profile!.fotoPerfil,
-        perfilCompleto: true,
-        estado: _profile!.estado,
-      );
+    // ✅ Base mínima por si _profile es null (primer uso / solo sesión local)
+    final base =
+        _profile ??
+        TechnicianProfile(
+          id: 0,
+          userId: 0,
+          cedula: null,
+          nombres: null,
+          apellidos: null,
+          telefono: null,
+          correo: _correoCtrl.text.trim().isNotEmpty
+              ? _correoCtrl.text.trim()
+              : null,
+          direccion: null,
+          tipoSangre: null,
+          contactoEmergencia: null,
+          fotoPerfil: null,
+          perfilCompleto: false,
+          estado: 'activo',
+        );
 
+    final updated = TechnicianProfile(
+      id: base.id,
+      userId: base.userId,
+      cedula: _cedulaCtrl.text.trim(),
+      nombres: _nombresCtrl.text.trim(),
+      apellidos: _apellidosCtrl.text.trim(),
+      telefono: _telefonoCtrl.text.trim(),
+      correo: _correoCtrl.text.trim(),
+      direccion: _direccionCtrl.text.trim(),
+      tipoSangre: _tipoSangreCtrl.text.trim(),
+      contactoEmergencia: _contactoEmergenciaCtrl.text.trim(),
+      fotoPerfil: base.fotoPerfil,
+      perfilCompleto: true,
+      estado: base.estado,
+    );
+
+    try {
       // Intento online
       final saved = await _service.updateProfile(updated);
       _applyProfileToForm(saved);
@@ -225,28 +244,11 @@ class _TechnicianProfilePageState extends State<TechnicianProfilePage> {
         const SnackBar(content: Text('Perfil actualizado correctamente')),
       );
     } catch (e) {
-      // Si falla (sin internet, token, etc.), al menos guardamos local
-      final updated = TechnicianProfile(
-        id: _profile!.id,
-        userId: _profile!.userId,
-        cedula: _cedulaCtrl.text.trim(),
-        nombres: _nombresCtrl.text.trim(),
-        apellidos: _apellidosCtrl.text.trim(),
-        telefono: _telefonoCtrl.text.trim(),
-        correo: _correoCtrl.text.trim(),
-        direccion: _direccionCtrl.text.trim(),
-        tipoSangre: _tipoSangreCtrl.text.trim(),
-        contactoEmergencia: _contactoEmergenciaCtrl.text.trim(),
-        fotoPerfil: _profile!.fotoPerfil,
-        perfilCompleto: true,
-        estado: _profile!.estado,
-      );
-
+      // Sin internet / error API → guardamos localmente igual
       await _cacheProfile(updated);
       _applyProfileToForm(updated);
 
       if (mounted) {
-        // Mensaje neutro, sin hablar de token ni backend
         setState(() {
           _error =
               'No se pudo enviar los datos al servidor, pero se guardaron en este dispositivo.';
