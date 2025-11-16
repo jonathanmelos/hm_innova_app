@@ -10,6 +10,9 @@ import 'package:permission_handler/permission_handler.dart';
 // ⬇️ NUEVO: perfil del técnico
 import 'package:hm_innova_app/features/auth/presentation/technician_profile_page.dart';
 
+// ⬇️ NUEVO: registro de dispositivo
+import 'package:hm_innova_app/core/device/device_service.dart';
+
 import 'history_page.dart';
 import 'qr_scan_page.dart';
 import '../state/attendance_controller.dart';
@@ -45,6 +48,10 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
     super.initState();
     _controller = AttendanceController()..addListener(_onState);
     _bootstrap();
+
+    // 🔹 Registrar / actualizar el dispositivo en el backend (no bloquea la UI)
+    DeviceService().registerDeviceIfNeeded();
+
     _dateTicker = Timer.periodic(const Duration(minutes: 1), (_) {
       if (mounted) setState(() => _now = DateTime.now());
     });

@@ -44,7 +44,11 @@ dependencies:
   # 🔒 NUEVO: almacenamiento seguro para token Sanctum
   flutter_secure_storage: ^9.0.0
 
- 
+  # 🔧 NUEVO: info de dispositivo y UUID lógico
+  device_info_plus: ^10.1.0
+  package_info_plus: ^8.0.0
+  uuid: ^4.4.0
+
 dev_dependencies:
   flutter_test:
     sdk: flutter

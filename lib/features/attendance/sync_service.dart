@@ -1,84 +1,77 @@
-import 'dart:convert';
-import 'package:flutter/foundation.dart';
-import 'package:http/http.dart' as http;
 import 'package:connectivity_plus/connectivity_plus.dart';
-import '../../core/db/app_database.dart';
+
+import '../../core/network/api_client.dart';
+import '../../core/device/device_service.dart';
+import 'data/work_session_dao.dart';
 
 class SyncService {
-  static const String apiUrl = 'https://TU_BACKEND.com/api/sync-sessions'; // <-- tu endpoint real
+  SyncService._();
 
-  /// Compat: soporta tanto ConnectivityResult único como lista.
-  static Future<bool> _hasConnection() async {
-    final result = await Connectivity().checkConnectivity();
-
-    // Nuevas versiones: List<ConnectivityResult>
-    if (result is List<ConnectivityResult>) {
-      return result.any((r) =>
-          r == ConnectivityResult.wifi ||
-          r == ConnectivityResult.mobile ||
-          r == ConnectivityResult.ethernet);
-    }
-    // Viejas versiones: ConnectivityResult
-    return result != ConnectivityResult.none;
-  }
-
+  /// Sincroniza sesiones cerradas (end_at != null) si hay conexión.
   static Future<void> syncIfConnected() async {
-    final ok = await _hasConnection();
-    if (!ok) {
-      debugPrint('[SYNC] Sin conexión, reintento luego.');
+    // 1. Verificar conectividad antes de intentar sincronizar
+    final connectivity = await Connectivity().checkConnectivity();
+    if (connectivity == ConnectivityResult.none) {
+      throw Exception('Sin conexión a internet');
+    }
+
+    final dao = WorkSessionDao();
+    final unsynced = await dao.getUnsyncedSessions();
+
+    // 2. Si no hay sesiones pendientes, no hacemos nada
+    if (unsynced.isEmpty) {
       return;
     }
 
-    final db = await AppDatabase.instance;
+    // 3. Identificador lógico del dispositivo
+    final deviceUuid = await DeviceService().getDeviceUuid();
 
-    // Sesiones no sincronizadas
-    final sessions = await db.query(
-      'work_sessions',
-      where: 'synced = 0 OR synced IS NULL',
+    // 4. Token de autenticación para la API Laravel (Sanctum)
+    final token = await ApiClient.I.getToken();
+
+    // 5. Construimos el payload para Laravel con clave "0", "1", "2"...
+    final Map<String, dynamic> payload = {};
+
+    for (var i = 0; i < unsynced.length; i++) {
+      final row = unsynced[i];
+      final localId = row['id'] as int;
+      final startMs = row['start_at'] as int;
+      final endMs = row['end_at'] as int?;
+
+      final startedAt = DateTime.fromMillisecondsSinceEpoch(
+        startMs,
+      ).toIso8601String();
+
+      final endedAt = endMs != null
+          ? DateTime.fromMillisecondsSinceEpoch(endMs).toIso8601String()
+          : null;
+
+      payload['$i'] = {
+        'device_session_uuid': '${deviceUuid}_$localId',
+        'device_uuid': deviceUuid,
+        'started_at': startedAt,
+        'ended_at': endedAt,
+        'duration_seconds': (row['total_seconds'] as int?) ?? 0,
+        // Geolocalización futura
+        'start_lat': null,
+        'start_lng': null,
+        'end_lat': null,
+        'end_lng': null,
+      };
+    }
+
+    // 6. Enviamos todo al backend — AHORA CORRECTAMENTE CON /api/
+    await ApiClient.I.post(
+      '/api/work-sessions/sync', // 👈 también con /api
+      bearerToken: token,
+      body: payload,
     );
 
-    for (final session in sessions) {
-      final sessionId = session['id'] as int;
-
-      final locations = await db.query(
-        'session_locations',
-        where: 'session_id = ? AND (synced = 0 OR synced IS NULL)',
-        whereArgs: [sessionId],
-        orderBy: 'at ASC',
-      );
-
-      final payload = {
-        'session': session,
-        'locations': locations,
-      };
-
-      try {
-        final res = await http.post(
-          Uri.parse(apiUrl),
-          headers: {'Content-Type': 'application/json'},
-          body: jsonEncode(payload),
-        );
-
-        if (res.statusCode == 200) {
-          await db.update(
-            'work_sessions',
-            {'synced': 1},
-            where: 'id = ?',
-            whereArgs: [sessionId],
-          );
-          await db.update(
-            'session_locations',
-            {'synced': 1},
-            where: 'session_id = ? AND (synced = 0 OR synced IS NULL)',
-            whereArgs: [sessionId],
-          );
-          debugPrint('[SYNC] OK sesión #$sessionId');
-        } else {
-          debugPrint('[SYNC] HTTP ${res.statusCode} sesión #$sessionId');
-        }
-      } catch (e) {
-        debugPrint('[SYNC] Error sesión #$sessionId → $e');
-      }
+    // 7. Si llegó aquí sin lanzar excepción, marcamos todo como sincronizado.
+    for (final row in unsynced) {
+      final localId = row['id'] as int;
+      await dao.markSessionAsSynced(localId);
+      await dao.markLocationsAsSynced(localId);
     }
   }
 }
