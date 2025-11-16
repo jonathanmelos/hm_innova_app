@@ -1,9 +1,5 @@
 // lib/features/auth/auth_repository.dart
 
-import 'dart:convert';
-
-import 'package:http/http.dart' as http;
-
 import '../../core/network/api_client.dart';
 import '../../core/network/endpoints.dart';
 
@@ -14,12 +10,8 @@ class AuthRepository {
 
   /// Solicita OTP para un correo
   Future<void> requestOtp(String email) async {
-    final http.Response resp = await _client.postJson(
-      ApiEndpoints.otpRequest,
-      body: {'email': email},
-    );
-
-    _client.decodeOrThrow(resp);
+    // Usamos el cliente nuevo que ya decodifica y lanza errores
+    await _client.post(ApiEndpoints.otpRequest, body: {'email': email});
   }
 
   /// Verifica el OTP, guarda token y devuelve el payload completo (user + tecnico)
@@ -27,38 +19,36 @@ class AuthRepository {
     required String email,
     required String code,
   }) async {
-    final http.Response resp = await _client.postJson(
+    // Igual que antes, pero usando _client.post (que ya hace decodeOrThrow)
+    final data = await _client.post(
       ApiEndpoints.otpVerify,
       body: {'email': email, 'code': code},
     );
-
-    final data = _client.decodeOrThrow(resp);
 
     final token = data['token']?.toString();
     if (token == null || token.isEmpty) {
       throw Exception('La API no devolvió un token válido');
     }
 
-    // Guardamos el token en storage seguro
+    // Guardamos el token en storage seguro (FlutterSecureStorage)
     await _client.saveToken(token);
 
     return data;
   }
 
-  /// Llama a /api/me usando el token actual para validar sesión
+  /// Llama a /api/me usando el token actual para validar sesión.
+  /// Importante: aquí NO borramos el token ni atrapamos errores,
+  /// para que AuthGate pueda manejar el modo offline-first.
   Future<Map<String, dynamic>?> fetchMe() async {
     final token = await _client.getToken();
     if (token == null) return null;
 
-    final resp = await _client.getAuth(ApiEndpoints.me);
+    // Si el servidor responde con error o no hay red,
+    // _client.get lanzará una excepción.
+    // Esa excepción será capturada en AuthGate y se mantendrá la sesión local.
+    final data = await _client.get(ApiEndpoints.me, bearerToken: token);
 
-    if (resp.statusCode == 200) {
-      return jsonDecode(resp.body) as Map<String, dynamic>;
-    }
-
-    // si falla, limpiamos token
-    await _client.clearToken();
-    return null;
+    return data;
   }
 
   Future<void> logout() async {

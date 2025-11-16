@@ -1,6 +1,10 @@
 // lib/features/auth/presentation/auth_page.dart
 
+import 'dart:async';
+
 import 'package:flutter/material.dart';
+import 'package:connectivity_plus/connectivity_plus.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 import '../auth_controller.dart';
 import '../auth_state.dart';
@@ -10,9 +14,11 @@ import '../../../core/network/endpoints.dart';
 import '../auth_service.dart';
 
 /// 🔒 Puerta de entrada:
-/// - Revisa si ya hay sesión válida (/api/me)
-/// - Si hay, muestra HmInnovaApp
-/// - Si no, muestra la pantalla de login OTP
+/// AHORA (OFFLINE-FIRST REAL):
+/// - Revisa SOLO si hay sesión local (has_session).
+/// - Si NO hay, muestra login.
+/// - Si hay sesión → entra directo al módulo, con o sin internet.
+/// La validación de token se delega a los módulos que consumen API.
 class AuthGate extends StatefulWidget {
   const AuthGate({super.key});
 
@@ -30,15 +36,16 @@ class _AuthGateState extends State<AuthGate> {
   }
 
   Future<bool> _checkSession() async {
-    try {
-      // Opcional: aquí puedes ajustar baseUrl si pruebas en físico
-      debugPrint('API baseUrl: ${ApiConfig.baseUrl}');
-      final me = await AuthService.I.fetchMe();
-      return me != null;
-    } catch (e) {
-      debugPrint('Error en /api/me: $e');
-      return false;
-    }
+    final prefs = await SharedPreferences.getInstance();
+    final hasSession = prefs.getBool('has_session') ?? false;
+
+    // Dejamos este log solo para debug; si quieres, lo puedes quitar.
+    debugPrint('AuthGate: hasSession(local) = $hasSession');
+
+    // 🎯 LÓGICA SIMPLIFICADA:
+    // Si el dispositivo recuerda una sesión, entra directo.
+    // No llamamos a /api/me aquí para no romper el modo offline-first.
+    return hasSession;
   }
 
   @override
@@ -55,7 +62,7 @@ class _AuthGateState extends State<AuthGate> {
         final isLoggedIn = snapshot.data ?? false;
 
         if (isLoggedIn) {
-          // Ya hay token válido → directo al módulo de asistencia
+          // Ya hay sesión local → directo al módulo de asistencia
           return const HmInnovaApp();
         }
 
@@ -132,7 +139,6 @@ class _AuthPageState extends State<AuthPage> {
       case AuthStep.enterCode:
         return _buildCodeStep(state);
       case AuthStep.authenticated:
-        // No se usa porque se intercepta antes, pero el switch lo exige.
         return const SizedBox.shrink();
     }
   }
@@ -142,7 +148,7 @@ class _AuthPageState extends State<AuthPage> {
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         const Text(
-          'Ingresa tu correo institucional',
+          'Ingresa tu correo',
           style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
         ),
         const SizedBox(height: 8),
@@ -218,13 +224,10 @@ class _AuthPageState extends State<AuthPage> {
           onPressed: state.isLoading
               ? null
               : () {
-                  // Volver a escribir el correo
                   setState(() {
                     _codeController.clear();
                   });
-                  _controller.requestOtp(
-                    _controller.state.email ?? '',
-                  ); // o reset
+                  _controller.requestOtp(_controller.state.email ?? '');
                 },
           child: const Text('Reenviar código'),
         ),

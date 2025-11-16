@@ -9,7 +9,7 @@ import 'package:flutter_localizations/flutter_localizations.dart';
 
 import 'features/attendance/bg_location_task.dart';
 import 'features/attendance/presentation/app.dart'; // HmInnovaApp
-import 'features/auth/presentation/auth_page.dart'; // ⬅️ NUEVO: AuthGate
+import 'features/auth/presentation/auth_page.dart'; // AuthGate
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -81,9 +81,7 @@ class MyApp extends StatelessWidget {
           GlobalWidgetsLocalizations.delegate,
           GlobalCupertinoLocalizations.delegate,
         ],
-        // ⬇️ ANTES: home: const HmInnovaApp(),
-        // AHORA: protegemos con el gate de autenticación
-        home: const AuthGate(),
+        home: const AuthGate(), // ⬅️ aquí sigue entrando
       ),
     );
   }

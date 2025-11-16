@@ -1,6 +1,11 @@
+import 'dart:convert';
+
 import 'package:flutter/material.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 import '../../../core/network/api_client.dart';
+import '../../auth/presentation/auth_page.dart'; // AuthGate
+import '../../auth/auth_service.dart';
 import '../data/technician_profile_service.dart';
 import '../domain/technician_profile.dart';
 
@@ -31,11 +36,102 @@ class _TechnicianProfilePageState extends State<TechnicianProfilePage> {
   bool _saving = false;
   String? _error;
 
+  static const _cacheKey = 'technician_profile_cache';
+
   @override
   void initState() {
     super.initState();
     _loadProfile();
   }
+
+  // ---------------- LOGOUT MANUAL ----------------
+
+  Future<void> _doLogout() async {
+    try {
+      await AuthService.I.logout();
+    } catch (_) {
+      // Si falla por red, igual cerramos sesión local
+    }
+
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.remove('has_session');
+    await prefs.remove('session_email');
+    await prefs.remove(_cacheKey);
+
+    if (!mounted) return;
+
+    Navigator.of(context).pushAndRemoveUntil(
+      MaterialPageRoute(builder: (_) => const AuthGate()),
+      (route) => false,
+    );
+  }
+
+  void _confirmLogout(BuildContext context) {
+    showDialog(
+      context: context,
+      builder: (_) => AlertDialog(
+        title: const Text('Cerrar sesión'),
+        content: const Text(
+          '¿Seguro que deseas cerrar sesión en este dispositivo?',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('Cancelar'),
+          ),
+          FilledButton(
+            onPressed: () {
+              Navigator.pop(context);
+              _doLogout();
+            },
+            child: const Text('Cerrar sesión'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  // ---------------- CACHE LOCAL PERFIL ----------------
+
+  Future<void> _cacheProfile(TechnicianProfile profile) async {
+    final prefs = await SharedPreferences.getInstance();
+    final map = profile.toJson()
+      ..addAll({
+        'id': profile.id,
+        'user_id': profile.userId,
+        'perfil_completo': profile.perfilCompleto,
+        'estado': profile.estado,
+        'foto_perfil': profile.fotoPerfil,
+      });
+
+    await prefs.setString(_cacheKey, jsonEncode(map));
+  }
+
+  Future<TechnicianProfile?> _getCachedProfile() async {
+    final prefs = await SharedPreferences.getInstance();
+    final raw = prefs.getString(_cacheKey);
+    if (raw == null) return null;
+    try {
+      final map = jsonDecode(raw) as Map<String, dynamic>;
+      return TechnicianProfile.fromJson(map);
+    } catch (_) {
+      return null;
+    }
+  }
+
+  void _applyProfileToForm(TechnicianProfile profile) {
+    _profile = profile;
+    _cedulaCtrl.text = profile.cedula ?? '';
+    _nombresCtrl.text = profile.nombres ?? '';
+    _apellidosCtrl.text = profile.apellidos ?? '';
+    _telefonoCtrl.text = profile.telefono ?? '';
+    _correoCtrl.text = profile.correo ?? '';
+    _direccionCtrl.text = profile.direccion ?? '';
+    _tipoSangreCtrl.text = profile.tipoSangre ?? '';
+    _contactoEmergenciaCtrl.text = profile.contactoEmergencia ?? '';
+  }
+
+  // ---------------- CARGA DE PERFIL (ONLINE + OFFLINE) ----------------
 
   Future<void> _loadProfile() async {
     setState(() {
@@ -44,30 +140,55 @@ class _TechnicianProfilePageState extends State<TechnicianProfilePage> {
     });
 
     try {
+      // 1) Intentar pedir al servidor
       final profile = await _service.fetchProfile();
-      _profile = profile;
+      _applyProfileToForm(profile);
+      await _cacheProfile(profile);
+      if (mounted) setState(() => _loading = false);
+    } catch (_) {
+      // 2) Cualquier error (sin token, offline, server caído): usar caché si existe
+      final cached = await _getCachedProfile();
 
-      _cedulaCtrl.text = profile.cedula ?? '';
-      _nombresCtrl.text = profile.nombres ?? '';
-      _apellidosCtrl.text = profile.apellidos ?? '';
-      _telefonoCtrl.text = profile.telefono ?? '';
-      _correoCtrl.text = profile.correo ?? '';
-      _direccionCtrl.text = profile.direccion ?? '';
-      _tipoSangreCtrl.text = profile.tipoSangre ?? '';
-      _contactoEmergenciaCtrl.text = profile.contactoEmergencia ?? '';
+      if (cached != null) {
+        _applyProfileToForm(cached);
 
-      if (mounted) {
-        setState(() => _loading = false);
-      }
-    } catch (e) {
-      if (mounted) {
-        setState(() {
-          _loading = false;
-          _error = 'Error al cargar perfil: $e';
-        });
+        // Completar correo desde sesión si estuviera vacío
+        if ((_correoCtrl.text.isEmpty || _correoCtrl.text.trim().isEmpty)) {
+          final prefs = await SharedPreferences.getInstance();
+          final email = prefs.getString('session_email');
+          if (email != null) {
+            _correoCtrl.text = email;
+          }
+        }
+
+        if (mounted) {
+          setState(() {
+            _loading = false;
+            // Mensaje neutro (solo info). Si no quieres mensaje, pon _error = null;
+            _error =
+                'Mostrando datos guardados en este dispositivo. Los cambios se sincronizarán cuando haya conexión.';
+          });
+        }
+      } else {
+        // 3) No hay caché todavía
+        final prefs = await SharedPreferences.getInstance();
+        final email = prefs.getString('session_email');
+        if (email != null && _correoCtrl.text.trim().isEmpty) {
+          _correoCtrl.text = email;
+        }
+
+        if (mounted) {
+          setState(() {
+            _loading = false;
+            _error =
+                'No se pudo cargar el perfil en este momento. Intenta más tarde.';
+          });
+        }
       }
     }
   }
+
+  // ---------------- GUARDAR CAMBIOS ----------------
 
   Future<void> _save() async {
     if (_profile == null) return;
@@ -94,16 +215,49 @@ class _TechnicianProfilePageState extends State<TechnicianProfilePage> {
         estado: _profile!.estado,
       );
 
+      // Intento online
       final saved = await _service.updateProfile(updated);
-      _profile = saved;
+      _applyProfileToForm(saved);
+      await _cacheProfile(saved);
 
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('Perfil actualizado correctamente')),
       );
     } catch (e) {
+      // Si falla (sin internet, token, etc.), al menos guardamos local
+      final updated = TechnicianProfile(
+        id: _profile!.id,
+        userId: _profile!.userId,
+        cedula: _cedulaCtrl.text.trim(),
+        nombres: _nombresCtrl.text.trim(),
+        apellidos: _apellidosCtrl.text.trim(),
+        telefono: _telefonoCtrl.text.trim(),
+        correo: _correoCtrl.text.trim(),
+        direccion: _direccionCtrl.text.trim(),
+        tipoSangre: _tipoSangreCtrl.text.trim(),
+        contactoEmergencia: _contactoEmergenciaCtrl.text.trim(),
+        fotoPerfil: _profile!.fotoPerfil,
+        perfilCompleto: true,
+        estado: _profile!.estado,
+      );
+
+      await _cacheProfile(updated);
+      _applyProfileToForm(updated);
+
       if (mounted) {
-        setState(() => _error = 'Error al guardar: $e');
+        // Mensaje neutro, sin hablar de token ni backend
+        setState(() {
+          _error =
+              'No se pudo enviar los datos al servidor, pero se guardaron en este dispositivo.';
+        });
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text(
+              'Cambios guardados localmente. Se sincronizarán cuando tengas conexión.',
+            ),
+          ),
+        );
       }
     } finally {
       if (mounted) {
@@ -131,13 +285,31 @@ class _TechnicianProfilePageState extends State<TechnicianProfilePage> {
 
     if (_loading) {
       return Scaffold(
-        appBar: AppBar(title: const Text('Perfil del técnico')),
+        appBar: AppBar(
+          title: const Text('Perfil del técnico'),
+          actions: [
+            IconButton(
+              tooltip: 'Cerrar sesión',
+              icon: const Icon(Icons.logout),
+              onPressed: () => _confirmLogout(context),
+            ),
+          ],
+        ),
         body: const Center(child: CircularProgressIndicator()),
       );
     }
 
     return Scaffold(
-      appBar: AppBar(title: const Text('Perfil del técnico')),
+      appBar: AppBar(
+        title: const Text('Perfil del técnico'),
+        actions: [
+          IconButton(
+            tooltip: 'Cerrar sesión',
+            icon: const Icon(Icons.logout),
+            onPressed: () => _confirmLogout(context),
+          ),
+        ],
+      ),
       body: SingleChildScrollView(
         padding: const EdgeInsets.all(16),
         child: Column(
@@ -145,7 +317,10 @@ class _TechnicianProfilePageState extends State<TechnicianProfilePage> {
             if (_error != null)
               Padding(
                 padding: const EdgeInsets.only(bottom: 12),
-                child: Text(_error!, style: const TextStyle(color: Colors.red)),
+                child: Text(
+                  _error!,
+                  style: const TextStyle(color: Colors.orange),
+                ),
               ),
 
             TextField(
@@ -193,7 +368,6 @@ class _TechnicianProfilePageState extends State<TechnicianProfilePage> {
                 border: OutlineInputBorder(),
               ),
               keyboardType: TextInputType.emailAddress,
-              readOnly: true,
             ),
             const SizedBox(height: 12),
 
@@ -255,6 +429,17 @@ class _TechnicianProfilePageState extends State<TechnicianProfilePage> {
                         ),
                       )
                     : const Text('Guardar cambios'),
+              ),
+            ),
+            const SizedBox(height: 24),
+
+            SizedBox(
+              width: double.infinity,
+              child: OutlinedButton.icon(
+                icon: const Icon(Icons.logout),
+                label: const Text("Cerrar sesión"),
+                onPressed: () => _confirmLogout(context),
+                style: OutlinedButton.styleFrom(foregroundColor: Colors.red),
               ),
             ),
           ],
