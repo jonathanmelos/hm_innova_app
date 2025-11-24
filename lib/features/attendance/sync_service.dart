@@ -7,10 +7,13 @@ import 'data/work_session_dao.dart';
 class SyncService {
   SyncService._();
 
-  /// Sincroniza sesiones cerradas (end_at != null)
-  /// y ubicaciones pendientes si hay conexión.
+  /// Sincroniza:
+  /// - Sesiones cerradas
+  /// - Ubicaciones pendientes
+  /// - Pausas pendientes
+  /// - Escaneos QR pendientes
   static Future<void> syncIfConnected() async {
-    // 1. Verificar conectividad antes de intentar sincronizar
+    // 1. Verificar conectividad
     final connectivity = await Connectivity().checkConnectivity();
     if (connectivity == ConnectivityResult.none) {
       throw Exception('Sin conexión a internet');
@@ -18,23 +21,28 @@ class SyncService {
 
     final dao = WorkSessionDao();
 
-    // 2. Traer pendientes (sesiones + ubicaciones)
+    // 2. Cargar pendientes
     final unsyncedSessions = await dao.getUnsyncedSessions();
     final unsyncedLocations = await dao.getUnsyncedLocations();
+    final unsyncedPauses = await dao.getUnsyncedPauses();
+    final unsyncedQrScans = await dao.getUnsyncedQrScans();
 
-    // Si no hay nada por enviar, salimos
-    if (unsyncedSessions.isEmpty && unsyncedLocations.isEmpty) {
+    // 3. Si no hay nada, salir
+    if (unsyncedSessions.isEmpty &&
+        unsyncedLocations.isEmpty &&
+        unsyncedPauses.isEmpty &&
+        unsyncedQrScans.isEmpty) {
       return;
     }
 
-    // 3. Identificador lógico del dispositivo
+    // 4. Identificador del dispositivo
     final deviceUuid = await DeviceService().getDeviceUuid();
 
-    // 4. Token de autenticación para la API Laravel (Sanctum)
+    // 5. Token Laravel Sanctum
     final token = await ApiClient.I.getToken();
 
     // ------------------------------------------------------------------
-    // 5. Enviar SESIONES a /api/work-sessions/sync (igual que antes)
+    // 6. Enviar SESIONES a /api/work-sessions/sync
     // ------------------------------------------------------------------
     if (unsyncedSessions.isNotEmpty) {
       final Map<String, dynamic> payloadSessions = {};
@@ -59,7 +67,6 @@ class SyncService {
           'started_at': startedAt,
           'ended_at': endedAt,
           'duration_seconds': (row['total_seconds'] as int?) ?? 0,
-          // Geolocalización futura (inicio/fin) si algún día la calculas aquí
           'start_lat': null,
           'start_lng': null,
           'end_lat': null,
@@ -73,30 +80,29 @@ class SyncService {
         body: payloadSessions,
       );
 
-      // Marcar SOLO las sesiones como sincronizadas
+      // Sessions → synced = 1
       for (final row in unsyncedSessions) {
         final localId = row['id'] as int;
         await dao.markSessionAsSynced(localId);
-        // 👇 OJO: ya NO marcamos las ubicaciones aquí
       }
     }
 
     // ------------------------------------------------------------------
-    // 6. Enviar UBICACIONES a /api/work-session-locations/sync
+    // 7. Enviar UBICACIONES a /api/work-session-locations/sync
     // ------------------------------------------------------------------
     if (unsyncedLocations.isNotEmpty) {
       final Map<String, dynamic> payloadLocations = {};
 
       for (var i = 0; i < unsyncedLocations.length; i++) {
         final row = unsyncedLocations[i];
-        final localSessionId = row['session_id'] as int;
+        final sessionId = row['session_id'] as int;
         final atMs = row['at'] as int;
 
         payloadLocations['$i'] = {
-          // Misma convención que en las sesiones: deviceUuid + '_' + idLocal
-          'device_session_uuid': '${deviceUuid}_$localSessionId',
-          'recorded_at': DateTime.fromMillisecondsSinceEpoch(atMs)
-              .toIso8601String(),
+          'device_session_uuid': '${deviceUuid}_$sessionId',
+          'recorded_at': DateTime.fromMillisecondsSinceEpoch(
+            atMs,
+          ).toIso8601String(),
           'lat': row['lat'],
           'lng': row['lon'],
           'accuracy': row['accuracy'],
@@ -110,7 +116,7 @@ class SyncService {
         body: payloadLocations,
       );
 
-      // Marcar ubicaciones como sincronizadas agrupando por sesión
+      // Marcar ubicaciones por sesión
       final sessionIds = unsyncedLocations
           .map((e) => e['session_id'] as int)
           .toSet()
@@ -119,6 +125,85 @@ class SyncService {
       for (final sid in sessionIds) {
         await dao.markLocationsAsSynced(sid);
       }
+    }
+
+    // ------------------------------------------------------------------
+    // 8. Enviar PAUSAS a /api/work-session-pauses/sync
+    // ------------------------------------------------------------------
+    if (unsyncedPauses.isNotEmpty) {
+      final Map<String, dynamic> payloadPauses = {};
+
+      for (var i = 0; i < unsyncedPauses.length; i++) {
+        final row = unsyncedPauses[i];
+
+        final localId = row['id'] as int;
+        final sessionId = row['session_id'] as int;
+        final startMs = row['start_at'] as int;
+        final endMs = row['end_at'] as int?;
+
+        payloadPauses['$i'] = {
+          'local_id': localId,
+          'device_session_uuid': '${deviceUuid}_$sessionId',
+          'start_at': DateTime.fromMillisecondsSinceEpoch(
+            startMs,
+          ).toIso8601String(),
+          'end_at': endMs != null
+              ? DateTime.fromMillisecondsSinceEpoch(endMs).toIso8601String()
+              : null,
+        };
+      }
+
+      await ApiClient.I.post(
+        '/api/work-session-pauses/sync',
+        bearerToken: token,
+        body: payloadPauses,
+      );
+
+      // Marcar pausas como sincronizadas
+      final pauseIds = unsyncedPauses
+          .map((e) => e['id'] as int)
+          .toList(growable: false);
+
+      await dao.markPausesAsSynced(pauseIds);
+    }
+
+    // ------------------------------------------------------------------
+    // 9. Enviar QR SCANS a /api/work-session-scans/sync
+    // ------------------------------------------------------------------
+    if (unsyncedQrScans.isNotEmpty) {
+      final Map<String, dynamic> payloadScans = {};
+
+      for (var i = 0; i < unsyncedQrScans.length; i++) {
+        final row = unsyncedQrScans[i];
+
+        final localId = row['id'] as int;
+        final sessionId = row['session_id'] as int;
+        final scannedMs = row['scanned_at'] as int;
+
+        payloadScans['$i'] = {
+          'local_id': localId,
+          'device_session_uuid': '${deviceUuid}_$sessionId',
+          'project_code': row['project_code'],
+          'area': row['area'],
+          'description': row['description'],
+          'scanned_at': DateTime.fromMillisecondsSinceEpoch(
+            scannedMs,
+          ).toIso8601String(),
+        };
+      }
+
+      await ApiClient.I.post(
+        '/api/work-session-scans/sync',
+        bearerToken: token,
+        body: payloadScans,
+      );
+
+      // Marcar QR como sincronizados
+      final scanIds = unsyncedQrScans
+          .map((e) => e['id'] as int)
+          .toList(growable: false);
+
+      await dao.markQrScansAsSynced(scanIds);
     }
   }
 }

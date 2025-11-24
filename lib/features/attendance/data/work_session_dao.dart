@@ -128,6 +128,7 @@ class WorkSessionDao {
       'session_id': sessionId,
       'start_at': start.millisecondsSinceEpoch,
       'end_at': null,
+      'synced': 0, // importante para sync
     });
   }
 
@@ -135,7 +136,10 @@ class WorkSessionDao {
     final db = await _db;
     await db.update(
       'work_pauses',
-      {'end_at': end.millisecondsSinceEpoch},
+      {
+        'end_at': end.millisecondsSinceEpoch,
+        'synced': 0, // cambios deben sincronizarse
+      },
       where: 'id = ?',
       whereArgs: [pauseId],
     );
@@ -166,6 +170,26 @@ class WorkSessionDao {
     );
     final total = rows.first['total'] as num?;
     return (total ?? 0).toInt();
+  }
+
+  // ----------- SINCRONIZACIÓN DE PAUSAS -----------
+
+  Future<List<Map<String, Object?>>> getUnsyncedPauses() async {
+    final db = await _db;
+    return db.query('work_pauses', where: 'synced = 0', orderBy: 'id ASC');
+  }
+
+  Future<void> markPausesAsSynced(List<int> ids) async {
+    if (ids.isEmpty) return;
+    final db = await _db;
+
+    final placeholders = List.filled(ids.length, '?').join(',');
+    await db.update(
+      'work_pauses',
+      {'synced': 1},
+      where: 'id IN ($placeholders)',
+      whereArgs: ids,
+    );
   }
 
   // ----------------- MEDIA -----------------
@@ -211,9 +235,6 @@ class WorkSessionDao {
   }
 
   // ----------------- UBICACIONES -----------------
-  //
-  // user_id y event_type están soportados en la tabla, pero user_id es opcional
-  // (lo podremos rellenar luego con AuthService sin romper nada).
 
   Future<void> insertLocationLog({
     required int sessionId,
@@ -313,6 +334,7 @@ class WorkSessionDao {
       'area': area,
       'description': description,
       'scanned_at': (scannedAt ?? DateTime.now()).millisecondsSinceEpoch,
+      'synced': 0, // importante para sync
     });
   }
 
@@ -323,6 +345,25 @@ class WorkSessionDao {
       where: 'session_id = ?',
       whereArgs: [sessionId],
       orderBy: 'scanned_at DESC',
+    );
+  }
+
+  /// QR pendientes de sincronizar
+  Future<List<Map<String, Object?>>> getUnsyncedQrScans() async {
+    final db = await _db;
+    return db.query('qr_scans', where: 'synced = 0', orderBy: 'scanned_at ASC');
+  }
+
+  /// Marcar QR como sincronizados
+  Future<void> markQrScansAsSynced(List<int> ids) async {
+    if (ids.isEmpty) return;
+    final db = await _db;
+    final placeholders = List.filled(ids.length, '?').join(',');
+    await db.update(
+      'qr_scans',
+      {'synced': 1},
+      where: 'id IN ($placeholders)',
+      whereArgs: ids,
     );
   }
 

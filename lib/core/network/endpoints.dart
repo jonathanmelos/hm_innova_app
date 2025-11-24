@@ -8,7 +8,7 @@ class ApiConfig {
   ///
   /// ➤ Dispositivo físico (TU CASO AHORA – pruebas locales):
   ///    Usa la IP de tu PC en la red:
-  ///    http://192.168.0.112:8000
+  ///    http://192.168.0.100:8000
   ///
   /// ➤ Para PRODUCCIÓN (cuando esté en tu servidor web real):
   ///    Ejemplo:
@@ -16,7 +16,7 @@ class ApiConfig {
   ///
   /// *** DURANTE PRUEBAS EN TU TELÉFONO ***
   /// Deja esto así ↓↓↓
-  static const String baseUrl = 'http://192.168.0.112:8000';
+  static const String baseUrl = 'http://192.168.0.100:8000';
 }
 
 class ApiEndpoints {

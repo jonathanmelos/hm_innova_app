@@ -13,8 +13,7 @@ class AppDatabase {
 
     _instance = await openDatabase(
       dbPath,
-      version:
-          6, // ⬆️ Subido por nueva migración (user_id + event_type en session_locations)
+      version: 8, // ⬆️ Subido por nueva migración (synced en qr_scans)
       onConfigure: (db) async {
         try {
           await db.rawQuery('PRAGMA foreign_keys = ON');
@@ -54,6 +53,7 @@ class AppDatabase {
             session_id INTEGER NOT NULL,
             start_at INTEGER NOT NULL,
             end_at   INTEGER,
+            synced INTEGER NOT NULL DEFAULT 0,
             FOREIGN KEY(session_id) REFERENCES work_sessions(id) ON DELETE CASCADE
           );
         ''');
@@ -69,6 +69,7 @@ class AppDatabase {
             area TEXT,
             description TEXT,
             scanned_at INTEGER NOT NULL,
+            synced INTEGER NOT NULL DEFAULT 0,
             FOREIGN KEY(session_id) REFERENCES work_sessions(id) ON DELETE CASCADE
           );
         ''');
@@ -81,12 +82,12 @@ class AppDatabase {
           CREATE TABLE session_locations (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             session_id INTEGER NOT NULL,
-            user_id INTEGER,                     -- usuario dueño del registro (asociación directa)
+            user_id INTEGER,
             lat REAL NOT NULL,
             lon REAL NOT NULL,
             accuracy REAL NOT NULL,
             at INTEGER NOT NULL,
-            event_type TEXT NOT NULL DEFAULT 'ping',  -- tipo de evento: start/pause/resume/stop/ping
+            event_type TEXT NOT NULL DEFAULT 'ping',
             synced INTEGER NOT NULL DEFAULT 0,
             remote_id INTEGER,
             FOREIGN KEY(session_id) REFERENCES work_sessions(id) ON DELETE CASCADE
@@ -181,20 +182,28 @@ class AppDatabase {
           );
         }
 
-        // ⬇️ NUEVA MIGRACIÓN: asociar session_locations a usuario + tipo de evento
         if (oldV < 6) {
-          // usuario dueño del registro
           await db.execute(
             "ALTER TABLE session_locations ADD COLUMN user_id INTEGER;",
           );
-
-          // tipo de evento (start/pause/resume/stop/ping)
           await db.execute(
             "ALTER TABLE session_locations ADD COLUMN event_type TEXT;",
           );
-          // rellenamos las filas existentes con un valor por defecto
           await db.execute(
             "UPDATE session_locations SET event_type = 'ping' WHERE event_type IS NULL;",
+          );
+        }
+
+        if (oldV < 7) {
+          await db.execute(
+            "ALTER TABLE work_pauses ADD COLUMN synced INTEGER NOT NULL DEFAULT 0;",
+          );
+        }
+
+        // ⬇️ NUEVA MIGRACIÓN: columna synced en qr_scans
+        if (oldV < 8) {
+          await db.execute(
+            "ALTER TABLE qr_scans ADD COLUMN synced INTEGER NOT NULL DEFAULT 0;",
           );
         }
       },
