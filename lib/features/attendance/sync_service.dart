@@ -7,7 +7,8 @@ import 'data/work_session_dao.dart';
 class SyncService {
   SyncService._();
 
-  /// Sincroniza sesiones cerradas (end_at != null) si hay conexión.
+  /// Sincroniza sesiones cerradas (end_at != null)
+  /// y ubicaciones pendientes si hay conexión.
   static Future<void> syncIfConnected() async {
     // 1. Verificar conectividad antes de intentar sincronizar
     final connectivity = await Connectivity().checkConnectivity();
@@ -16,10 +17,13 @@ class SyncService {
     }
 
     final dao = WorkSessionDao();
-    final unsynced = await dao.getUnsyncedSessions();
 
-    // 2. Si no hay sesiones pendientes, no hacemos nada
-    if (unsynced.isEmpty) {
+    // 2. Traer pendientes (sesiones + ubicaciones)
+    final unsyncedSessions = await dao.getUnsyncedSessions();
+    final unsyncedLocations = await dao.getUnsyncedLocations();
+
+    // Si no hay nada por enviar, salimos
+    if (unsyncedSessions.isEmpty && unsyncedLocations.isEmpty) {
       return;
     }
 
@@ -29,49 +33,92 @@ class SyncService {
     // 4. Token de autenticación para la API Laravel (Sanctum)
     final token = await ApiClient.I.getToken();
 
-    // 5. Construimos el payload para Laravel con clave "0", "1", "2"...
-    final Map<String, dynamic> payload = {};
+    // ------------------------------------------------------------------
+    // 5. Enviar SESIONES a /api/work-sessions/sync (igual que antes)
+    // ------------------------------------------------------------------
+    if (unsyncedSessions.isNotEmpty) {
+      final Map<String, dynamic> payloadSessions = {};
 
-    for (var i = 0; i < unsynced.length; i++) {
-      final row = unsynced[i];
-      final localId = row['id'] as int;
-      final startMs = row['start_at'] as int;
-      final endMs = row['end_at'] as int?;
+      for (var i = 0; i < unsyncedSessions.length; i++) {
+        final row = unsyncedSessions[i];
+        final localId = row['id'] as int;
+        final startMs = row['start_at'] as int;
+        final endMs = row['end_at'] as int?;
 
-      final startedAt = DateTime.fromMillisecondsSinceEpoch(
-        startMs,
-      ).toIso8601String();
+        final startedAt = DateTime.fromMillisecondsSinceEpoch(
+          startMs,
+        ).toIso8601String();
 
-      final endedAt = endMs != null
-          ? DateTime.fromMillisecondsSinceEpoch(endMs).toIso8601String()
-          : null;
+        final endedAt = endMs != null
+            ? DateTime.fromMillisecondsSinceEpoch(endMs).toIso8601String()
+            : null;
 
-      payload['$i'] = {
-        'device_session_uuid': '${deviceUuid}_$localId',
-        'device_uuid': deviceUuid,
-        'started_at': startedAt,
-        'ended_at': endedAt,
-        'duration_seconds': (row['total_seconds'] as int?) ?? 0,
-        // Geolocalización futura
-        'start_lat': null,
-        'start_lng': null,
-        'end_lat': null,
-        'end_lng': null,
-      };
+        payloadSessions['$i'] = {
+          'device_session_uuid': '${deviceUuid}_$localId',
+          'device_uuid': deviceUuid,
+          'started_at': startedAt,
+          'ended_at': endedAt,
+          'duration_seconds': (row['total_seconds'] as int?) ?? 0,
+          // Geolocalización futura (inicio/fin) si algún día la calculas aquí
+          'start_lat': null,
+          'start_lng': null,
+          'end_lat': null,
+          'end_lng': null,
+        };
+      }
+
+      await ApiClient.I.post(
+        '/api/work-sessions/sync',
+        bearerToken: token,
+        body: payloadSessions,
+      );
+
+      // Marcar SOLO las sesiones como sincronizadas
+      for (final row in unsyncedSessions) {
+        final localId = row['id'] as int;
+        await dao.markSessionAsSynced(localId);
+        // 👇 OJO: ya NO marcamos las ubicaciones aquí
+      }
     }
 
-    // 6. Enviamos todo al backend — AHORA CORRECTAMENTE CON /api/
-    await ApiClient.I.post(
-      '/api/work-sessions/sync', // 👈 también con /api
-      bearerToken: token,
-      body: payload,
-    );
+    // ------------------------------------------------------------------
+    // 6. Enviar UBICACIONES a /api/work-session-locations/sync
+    // ------------------------------------------------------------------
+    if (unsyncedLocations.isNotEmpty) {
+      final Map<String, dynamic> payloadLocations = {};
 
-    // 7. Si llegó aquí sin lanzar excepción, marcamos todo como sincronizado.
-    for (final row in unsynced) {
-      final localId = row['id'] as int;
-      await dao.markSessionAsSynced(localId);
-      await dao.markLocationsAsSynced(localId);
+      for (var i = 0; i < unsyncedLocations.length; i++) {
+        final row = unsyncedLocations[i];
+        final localSessionId = row['session_id'] as int;
+        final atMs = row['at'] as int;
+
+        payloadLocations['$i'] = {
+          // Misma convención que en las sesiones: deviceUuid + '_' + idLocal
+          'device_session_uuid': '${deviceUuid}_$localSessionId',
+          'recorded_at': DateTime.fromMillisecondsSinceEpoch(atMs)
+              .toIso8601String(),
+          'lat': row['lat'],
+          'lng': row['lon'],
+          'accuracy': row['accuracy'],
+          'event_type': row['event_type'] ?? 'ping',
+        };
+      }
+
+      await ApiClient.I.post(
+        '/api/work-session-locations/sync',
+        bearerToken: token,
+        body: payloadLocations,
+      );
+
+      // Marcar ubicaciones como sincronizadas agrupando por sesión
+      final sessionIds = unsyncedLocations
+          .map((e) => e['session_id'] as int)
+          .toSet()
+          .toList();
+
+      for (final sid in sessionIds) {
+        await dao.markLocationsAsSynced(sid);
+      }
     }
   }
 }

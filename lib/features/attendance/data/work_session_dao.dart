@@ -22,7 +22,7 @@ class WorkSessionDao {
       'selfie_end': null,
       'photo_start': photoStart,
       'photo_end': null,
-      'synced': 0, // Columna agregada para control de sincronización
+      'synced': 0,
     });
   }
 
@@ -42,7 +42,7 @@ class WorkSessionDao {
         'status': 'stopped',
         if (selfieEnd != null) 'selfie_end': selfieEnd,
         if (photoEnd != null) 'photo_end': photoEnd,
-        'synced': 0, // Asegurar que se vuelva a sincronizar
+        'synced': 0,
       },
       where: 'id = ?',
       whereArgs: [id],
@@ -74,8 +74,9 @@ class WorkSessionDao {
       final rows = await db.query('work_sessions', orderBy: 'start_at DESC');
       return rows.map(WorkSession.fromMap).toList();
     }
-    final cutoff =
-        DateTime.now().subtract(Duration(days: days)).millisecondsSinceEpoch;
+    final cutoff = DateTime.now()
+        .subtract(Duration(days: days))
+        .millisecondsSinceEpoch;
     final rows = await db.query(
       'work_sessions',
       where: 'start_at > ?',
@@ -87,9 +88,21 @@ class WorkSessionDao {
 
   Future<void> cancelSession(int sessionId) async {
     final db = await _db;
-    await db.delete('work_pauses', where: 'session_id = ?', whereArgs: [sessionId]);
-    await db.delete('qr_scans', where: 'session_id = ?', whereArgs: [sessionId]);
-    await db.delete('session_locations', where: 'session_id = ?', whereArgs: [sessionId]);
+    await db.delete(
+      'work_pauses',
+      where: 'session_id = ?',
+      whereArgs: [sessionId],
+    );
+    await db.delete(
+      'qr_scans',
+      where: 'session_id = ?',
+      whereArgs: [sessionId],
+    );
+    await db.delete(
+      'session_locations',
+      where: 'session_id = ?',
+      whereArgs: [sessionId],
+    );
     await db.delete('work_sessions', where: 'id = ?', whereArgs: [sessionId]);
   }
 
@@ -143,11 +156,14 @@ class WorkSessionDao {
 
   Future<int> getTotalPausedSeconds(int sessionId) async {
     final db = await _db;
-    final rows = await db.rawQuery('''
+    final rows = await db.rawQuery(
+      '''
       SELECT SUM((COALESCE(end_at, strftime('%s','now')*1000) - start_at)/1000) AS total
       FROM work_pauses
       WHERE session_id = ?
-    ''', [sessionId]);
+    ''',
+      [sessionId],
+    );
     final total = rows.first['total'] as num?;
     return (total ?? 0).toInt();
   }
@@ -195,53 +211,90 @@ class WorkSessionDao {
   }
 
   // ----------------- UBICACIONES -----------------
+  //
+  // user_id y event_type están soportados en la tabla, pero user_id es opcional
+  // (lo podremos rellenar luego con AuthService sin romper nada).
 
   Future<void> insertLocationLog({
     required int sessionId,
+    int? userId,
     required double lat,
     required double lon,
     required double accuracy,
     required DateTime at,
+    String eventType = 'ping',
   }) async {
     final db = await _db;
     await db.insert('session_locations', {
       'session_id': sessionId,
+      'user_id': userId,
       'lat': lat,
       'lon': lon,
       'accuracy': accuracy,
       'at': at.millisecondsSinceEpoch,
+      'event_type': eventType,
       'synced': 0,
+      'remote_id': null,
     });
   }
 
   Future<void> markSessionAsSynced(int id) async {
     final db = await _db;
-    await db.update('work_sessions', {'synced': 1}, where: 'id = ?', whereArgs: [id]);
+    await db.update(
+      'work_sessions',
+      {'synced': 1},
+      where: 'id = ?',
+      whereArgs: [id],
+    );
   }
 
   Future<void> markLocationsAsSynced(int sessionId) async {
     final db = await _db;
-    await db.update('session_locations', {'synced': 1}, where: 'session_id = ? AND synced = 0', whereArgs: [sessionId]);
+    await db.update(
+      'session_locations',
+      {'synced': 1},
+      where: 'session_id = ? AND synced = 0',
+      whereArgs: [sessionId],
+    );
   }
 
   Future<List<Map<String, Object?>>> getUnsyncedSessions() async {
     final db = await _db;
-    return db.query('work_sessions', where: 'synced = 0 AND end_at IS NOT NULL', orderBy: 'id ASC');
+    return db.query(
+      'work_sessions',
+      where: 'synced = 0 AND end_at IS NOT NULL',
+      orderBy: 'id ASC',
+    );
   }
 
   Future<List<Map<String, Object?>>> getUnsyncedLocations() async {
     final db = await _db;
-    return db.query('session_locations', where: 'synced = 0', orderBy: 'at ASC');
+    return db.query(
+      'session_locations',
+      where: 'synced = 0',
+      orderBy: 'at ASC',
+    );
   }
 
-  Future<List<Map<String, Object?>>> getLocationsBySession(int sessionId) async {
+  Future<List<Map<String, Object?>>> getLocationsBySession(
+    int sessionId,
+  ) async {
     final db = await _db;
-    return db.query('session_locations', where: 'session_id = ?', whereArgs: [sessionId], orderBy: 'at DESC');
+    return db.query(
+      'session_locations',
+      where: 'session_id = ?',
+      whereArgs: [sessionId],
+      orderBy: 'at DESC',
+    );
   }
 
   Future<int> deleteLocationsBySession(int sessionId) async {
     final db = await _db;
-    return db.delete('session_locations', where: 'session_id = ?', whereArgs: [sessionId]);
+    return db.delete(
+      'session_locations',
+      where: 'session_id = ?',
+      whereArgs: [sessionId],
+    );
   }
 
   // ----------------- QR -----------------
@@ -265,7 +318,12 @@ class WorkSessionDao {
 
   Future<List<Map<String, Object?>>> getQrScansBySession(int sessionId) async {
     final db = await _db;
-    return db.query('qr_scans', where: 'session_id = ?', whereArgs: [sessionId], orderBy: 'scanned_at DESC');
+    return db.query(
+      'qr_scans',
+      where: 'session_id = ?',
+      whereArgs: [sessionId],
+      orderBy: 'scanned_at DESC',
+    );
   }
 
   // ----------------- DEBUG -----------------

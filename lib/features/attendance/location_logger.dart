@@ -1,9 +1,10 @@
 import 'dart:async';
 import 'package:geolocator/geolocator.dart';
-import '../attendance/data/work_session_dao.dart';
+
+import 'data/work_session_dao.dart';
 
 /// Servicio para registrar la ubicación cada cierto intervalo
-/// mientras la app está activa (no en segundo plano).
+/// mientras la app está activa (foreground).
 class LocationLogger {
   final WorkSessionDao _dao;
   Timer? _timer;
@@ -41,10 +42,12 @@ class LocationLogger {
 
       await _dao.insertLocationLog(
         sessionId: sessionId,
+        // userId: null, // lo rellenaremos más adelante cuando conectemos Auth
         lat: pos.latitude,
         lon: pos.longitude,
         accuracy: pos.accuracy,
         at: DateTime.now(),
+        eventType: 'ping',
       );
 
       // ignore: avoid_print
@@ -63,7 +66,7 @@ class LocationLogger {
   void startForegroundLoop(int sessionId) {
     _timer?.cancel();
     unawaited(logOnce(sessionId)); // primera lectura inmediata
-    _timer = Timer.periodic(const Duration(minutes: 60), (_) {
+    _timer = Timer.periodic(const Duration(hours: 1), (_) {
       unawaited(logOnce(sessionId));
     });
   }

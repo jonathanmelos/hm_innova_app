@@ -13,7 +13,8 @@ class AppDatabase {
 
     _instance = await openDatabase(
       dbPath,
-      version: 5, // ⬆️ Subido por nueva migración synced/remote_id
+      version:
+          6, // ⬆️ Subido por nueva migración (user_id + event_type en session_locations)
       onConfigure: (db) async {
         try {
           await db.rawQuery('PRAGMA foreign_keys = ON');
@@ -75,14 +76,17 @@ class AppDatabase {
           'CREATE INDEX IF NOT EXISTS idx_qr_scans_session ON qr_scans(session_id);',
         );
 
+        // ⬇️ session_locations ya creada con user_id + event_type, synced y remote_id
         await db.execute('''
           CREATE TABLE session_locations (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             session_id INTEGER NOT NULL,
+            user_id INTEGER,                     -- usuario dueño del registro (asociación directa)
             lat REAL NOT NULL,
             lon REAL NOT NULL,
             accuracy REAL NOT NULL,
             at INTEGER NOT NULL,
+            event_type TEXT NOT NULL DEFAULT 'ping',  -- tipo de evento: start/pause/resume/stop/ping
             synced INTEGER NOT NULL DEFAULT 0,
             remote_id INTEGER,
             FOREIGN KEY(session_id) REFERENCES work_sessions(id) ON DELETE CASCADE
@@ -174,6 +178,23 @@ class AppDatabase {
           );
           await db.execute(
             "ALTER TABLE session_locations ADD COLUMN remote_id INTEGER;",
+          );
+        }
+
+        // ⬇️ NUEVA MIGRACIÓN: asociar session_locations a usuario + tipo de evento
+        if (oldV < 6) {
+          // usuario dueño del registro
+          await db.execute(
+            "ALTER TABLE session_locations ADD COLUMN user_id INTEGER;",
+          );
+
+          // tipo de evento (start/pause/resume/stop/ping)
+          await db.execute(
+            "ALTER TABLE session_locations ADD COLUMN event_type TEXT;",
+          );
+          // rellenamos las filas existentes con un valor por defecto
+          await db.execute(
+            "UPDATE session_locations SET event_type = 'ping' WHERE event_type IS NULL;",
           );
         }
       },

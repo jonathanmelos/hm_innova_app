@@ -1,4 +1,3 @@
-// lib/features/attendance/bg_location_task.dart
 import 'dart:async';
 import 'dart:isolate';
 
@@ -16,9 +15,7 @@ import 'sync_service.dart';
 class BgLocationTask extends TaskHandler {
   late WorkSessionDao _dao;
 
-  // Clave de preferencias para el último sync ejecutado
   static const _kLastSyncMs = 'last_sync_ms';
-  // Ventana mínima entre sincronizaciones
   static const _syncInterval = Duration(minutes: 30);
 
   @override
@@ -35,7 +32,6 @@ class BgLocationTask extends TaskHandler {
 
     // 1) Registrar ubicación si hay sesión activa
     try {
-      // Verifica servicio y permisos antes de pedir la ubicación
       final serviceEnabled = await Geolocator.isLocationServiceEnabled();
       if (!serviceEnabled) {
         // ignore: avoid_print
@@ -59,7 +55,6 @@ class BgLocationTask extends TaskHandler {
         timeLimit: const Duration(seconds: 20),
       );
 
-      // ¿Hay sesión activa?
       final db = await AppDatabase.instance;
       final rows = await db.query(
         'work_sessions',
@@ -72,10 +67,12 @@ class BgLocationTask extends TaskHandler {
 
         await _dao.insertLocationLog(
           sessionId: sessionId,
+          // userId: null, // más adelante lo rellenamos con el usuario logueado
           lat: pos.latitude,
           lon: pos.longitude,
           accuracy: pos.accuracy,
           at: DateTime.now(),
+          eventType: 'ping',
         );
 
         // ignore: avoid_print
@@ -106,7 +103,7 @@ class BgLocationTask extends TaskHandler {
       if (now - last >= _syncInterval.inMilliseconds) {
         // ignore: avoid_print
         print('[SYNC] Intentando sincronizar…');
-        await SyncService.syncIfConnected(); // hace el check de conectividad adentro
+        await SyncService.syncIfConnected();
         await prefs.setInt(_kLastSyncMs, now);
       }
     } catch (e) {
@@ -115,7 +112,6 @@ class BgLocationTask extends TaskHandler {
     }
   }
 
-  // Algunos dispositivos llaman onRepeatEvent en lugar de onEvent
   @override
   Future<void> onRepeatEvent(DateTime timestamp, SendPort? sendPort) async {
     await onEvent(timestamp, sendPort);
@@ -129,14 +125,12 @@ class BgLocationTask extends TaskHandler {
 
   @override
   void onButtonPressed(String id) {
-    // Puedes mapear acciones si agregas más botones a la notificación
     // ignore: avoid_print
     print('[BG] notif button pressed: $id');
   }
 
   @override
   void onNotificationPressed() {
-    // Abre la app al tocar la notificación
     FlutterForegroundTask.launchApp();
   }
 }
