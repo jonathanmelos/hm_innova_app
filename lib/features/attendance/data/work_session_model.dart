@@ -52,29 +52,29 @@ class WorkSession {
 
   /// Serializa el objeto a un mapa compatible con SQLite
   Map<String, Object?> toMap() => {
-        'id': id,
-        'start_at': startAt.millisecondsSinceEpoch,
-        'end_at': endAt?.millisecondsSinceEpoch,
-        'total_seconds': totalSeconds,
-        'status': status,
-        'selfie_start': selfieStart,
-        'selfie_end': selfieEnd,
-        'photo_start': photoStart,
-        'photo_end': photoEnd,
-      };
+    'id': id,
+    'start_at': startAt.millisecondsSinceEpoch,
+    'end_at': endAt?.millisecondsSinceEpoch,
+    'total_seconds': totalSeconds,
+    'status': status,
+    'selfie_start': selfieStart,
+    'selfie_end': selfieEnd,
+    'photo_start': photoStart,
+    'photo_end': photoEnd,
+  };
 
   /// Crea una instancia desde una fila de la base de datos
   static WorkSession fromMap(Map<String, Object?> m) => WorkSession(
-        id: m['id'] as int?,
-        startAt: DateTime.fromMillisecondsSinceEpoch(m['start_at'] as int),
-        endAt: m['end_at'] == null
-            ? null
-            : DateTime.fromMillisecondsSinceEpoch(m['end_at'] as int),
-        totalSeconds: (m['total_seconds'] as int?) ?? 0,
-        status: (m['status'] as String?) ?? 'stopped',
-        selfieStart: m['selfie_start'] as String?,
-        selfieEnd: m['selfie_end'] as String?,
-        photoStart: m['photo_start'] as String?,
-        photoEnd: m['photo_end'] as String?,
-      );
+    id: m['id'] as int?,
+    startAt: DateTime.fromMillisecondsSinceEpoch(m['start_at'] as int),
+    endAt: m['end_at'] == null
+        ? null
+        : DateTime.fromMillisecondsSinceEpoch(m['end_at'] as int),
+    totalSeconds: (m['total_seconds'] as int?) ?? 0,
+    status: (m['status'] as String?) ?? 'stopped',
+    selfieStart: m['selfie_start'] as String?,
+    selfieEnd: m['selfie_end'] as String?,
+    photoStart: m['photo_start'] as String?,
+    photoEnd: m['photo_end'] as String?,
+  );
 }

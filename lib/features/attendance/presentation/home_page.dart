@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:convert'; // 👈 para jsonDecode
 import 'dart:io';
 
 import 'package:flutter/material.dart';
@@ -6,12 +7,20 @@ import 'package:image_picker/image_picker.dart';
 import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
 import 'package:permission_handler/permission_handler.dart';
+import 'package:http/http.dart' as http;
+import 'package:connectivity_plus/connectivity_plus.dart'; // 👈 para checkear conexión
 
-// ⬇️ NUEVO: perfil del técnico
+// ⬇️ usamos ApiClient para leer el token guardado
+import '../../../core/network/api_client.dart';
+
+// ⬇️ perfil del técnico
 import 'package:hm_innova_app/features/auth/presentation/technician_profile_page.dart';
 
-// ⬇️ NUEVO: registro de dispositivo
+// ⬇️ registro de dispositivo
 import 'package:hm_innova_app/core/device/device_service.dart';
+
+// ⬇️ watcher de conectividad para sync automático
+import 'package:hm_innova_app/features/attendance/connectivity_watcher.dart';
 
 import 'history_page.dart';
 import 'qr_scan_page.dart';
@@ -19,9 +28,9 @@ import '../state/attendance_controller.dart';
 import '../state/attendance_state.dart';
 import '../widgets/timer_display.dart';
 
-// ⬇️ NUEVO: compact widget de sincronización
+// widget compacto de sincronización
 import '../widgets/sync_inline.dart';
-// ⬇️ NUEVO: para disparar sync desde el AppBar
+// servicio de sincronización
 import '../sync_service.dart';
 
 class HomePage extends StatefulWidget {
@@ -43,14 +52,24 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
 
   bool get _isMobile => Platform.isAndroid || Platform.isIOS;
 
+  // Base URL de tu backend Laravel
+  static const String _apiBaseUrl = 'http://192.168.0.100:8000';
+
+  // Token de respaldo para desarrollo, por si no hay token guardado
+  static const String _debugToken =
+      '31|oNKVLmlv21hQIgWqkd2V7PR9j49vG6HkaVfS5l267828d748';
+
   @override
   void initState() {
     super.initState();
     _controller = AttendanceController()..addListener(_onState);
     _bootstrap();
 
-    // 🔹 Registrar / actualizar el dispositivo en el backend (no bloquea la UI)
+    // Registrar / actualizar el dispositivo en el backend (no bloquea la UI)
     DeviceService().registerDeviceIfNeeded();
+
+    // 🔁 Arranca la escucha de cambios de red para sync automático
+    ConnectivityWatcher.start();
 
     _dateTicker = Timer.periodic(const Duration(minutes: 1), (_) {
       if (mounted) setState(() => _now = DateTime.now());
@@ -179,7 +198,7 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
     return dest;
   }
 
-  // ⚠️ Versión que evita cuelgues en Android (no fuerza cámara frontal/trasera)
+  // Versión que evita cuelgues en Android (no fuerza cámara frontal/trasera)
   Future<XFile?> _safePickImage({required bool front}) async {
     final picker = ImagePicker();
 
@@ -199,6 +218,152 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
     return picker
         .pickImage(source: ImageSource.camera, imageQuality: 85)
         .timeout(const Duration(seconds: 25));
+  }
+
+  // Leer token desde ApiClient, con fallback al debugToken
+  Future<String> _getAuthToken() async {
+    try {
+      final token = await ApiClient.I.getToken();
+      if (token != null && token.isNotEmpty) {
+        debugPrint('Usando token desde ApiClient');
+        return token;
+      }
+      debugPrint('No hay token en ApiClient. Usando debugToken.');
+      return _debugToken;
+    } catch (e) {
+      debugPrint('Error al obtener token desde ApiClient: $e');
+      return _debugToken;
+    }
+  }
+
+  // 🔁 Intentar sincronizar sin mostrar errores al usuario
+  Future<void> _trySyncSilently() async {
+    try {
+      await SyncService.syncIfConnected();
+    } catch (e) {
+      debugPrint('Auto-sync ignorado: $e');
+    }
+  }
+
+  // Subir las fotos de inicio al backend Laravel
+  Future<void> _uploadStartMedia({
+    required String selfiePath,
+    required String sitePath,
+  }) async {
+    // 👇 ID de la sesión local, para mandarlo como work_session_id
+    final sessionId = _controller.currentSessionId;
+
+    // 1️⃣ OFFLINE FIRST: si no hay conexión, no intentamos subir.
+    final connectivity = await Connectivity().checkConnectivity();
+    if (connectivity == ConnectivityResult.none) {
+      debugPrint(
+        'Sin conexión: se omite el envío de fotos. Quedan solo en local.',
+      );
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text(
+              'Fotos almacenadas en el dispositivo. '
+              'Toca "Sincronizar" cuando tengas internet para enviarlas.',
+            ),
+            behavior: SnackBarBehavior.floating,
+            margin: EdgeInsets.all(16),
+          ),
+        );
+      }
+      return;
+    }
+
+    try {
+      final uri = Uri.parse('$_apiBaseUrl/api/jornada/iniciar');
+      final token = await _getAuthToken();
+
+      final request = http.MultipartRequest('POST', uri);
+
+      request.headers['Accept'] = 'application/json';
+      request.headers['Authorization'] = 'Bearer $token';
+
+      // 👉 Campo extra para que el backend sepa a qué jornada pertenecen las fotos
+      if (sessionId != null) {
+        request.fields['work_session_id'] = sessionId.toString();
+      }
+
+      // Archivos
+      request.files.add(
+        await http.MultipartFile.fromPath('selfie_inicio', selfiePath),
+      );
+      request.files.add(
+        await http.MultipartFile.fromPath('foto_contexto', sitePath),
+      );
+
+      final streamedResponse = await request.send();
+      final response = await http.Response.fromStream(streamedResponse);
+
+      debugPrint(
+        'UPLOAD RESPONSE: ${response.statusCode} ${response.body.substring(0, response.body.length.clamp(0, 500))}',
+      );
+
+      if (response.statusCode == 200 || response.statusCode == 201) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text('Fotos enviadas al servidor.'),
+              behavior: SnackBarBehavior.floating,
+              margin: EdgeInsets.all(16),
+            ),
+          );
+        }
+        return;
+      }
+
+      // Manejo especial para 422 (validación Laravel)
+      if (response.statusCode == 422) {
+        String msg = 'Error al enviar fotos (422).';
+        try {
+          final data = jsonDecode(response.body);
+          if (data is Map<String, dynamic>) {
+            if (data['message'] is String) {
+              msg = data['message'] as String;
+            }
+          }
+        } catch (_) {}
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text(msg),
+              behavior: SnackBarBehavior.floating,
+              margin: const EdgeInsets.all(16),
+            ),
+          );
+        }
+        return;
+      }
+
+      // Otros códigos de error
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Error al enviar fotos (${response.statusCode}).'),
+            behavior: SnackBarBehavior.floating,
+            margin: const EdgeInsets.all(16),
+          ),
+        );
+      }
+    } catch (e) {
+      debugPrint('Error en _uploadStartMedia: $e');
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text(
+              'Error de red al enviar fotos. '
+              'Se enviarán cuando sincronices con conexión.',
+            ),
+            behavior: SnackBarBehavior.floating,
+            margin: EdgeInsets.all(16),
+          ),
+        );
+      }
+    }
   }
 
   Future<void> _startWithCamerasOrFallback() async {
@@ -221,6 +386,7 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
         ),
       );
       await _controller.start();
+      await _trySyncSilently(); // 🔁 Intentar sincronizar al iniciar
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
@@ -246,6 +412,7 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
             'Tómate un selfie para registrar tu inicio de jornada.',
           ),
           actions: [
+            // 👇 Botón para que el usuario continúe
             TextButton(
               onPressed: () => Navigator.pop(context),
               child: const Text('Continuar'),
@@ -283,6 +450,14 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
         photoStart: sitePath,
       );
 
+      // Enviar también al servidor (si hay conexión)
+      if (selfiePath != null && sitePath != null) {
+        await _uploadStartMedia(selfiePath: selfiePath, sitePath: sitePath);
+      }
+
+      // 🔁 Intentar sincronizar después de iniciar con fotos
+      await _trySyncSilently();
+
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
@@ -310,6 +485,7 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
         ),
       );
       await _controller.start(); // fallback
+      await _trySyncSilently();
     }
   }
 
@@ -367,7 +543,10 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
               height: 56,
               width: double.infinity,
               child: ElevatedButton(
-                onPressed: _controller.pause,
+                onPressed: () async {
+                  await _controller.pause();
+                  await _trySyncSilently(); // 🔁 sync al pausar
+                },
                 style: ElevatedButton.styleFrom(shape: const StadiumBorder()),
                 child: const Text('Pausar'),
               ),
@@ -384,6 +563,8 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
                   await Navigator.of(
                     context,
                   ).push(MaterialPageRoute(builder: (_) => const QrScanPage()));
+                  // Opcional: intentar sync al volver del escaneo
+                  await _trySyncSilently();
                 },
               ),
             ),
@@ -402,14 +583,20 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
               children: [
                 Expanded(
                   child: OutlinedButton(
-                    onPressed: _controller.resume,
+                    onPressed: () async {
+                      await _controller.resume();
+                      await _trySyncSilently(); // 🔁 sync al continuar
+                    },
                     child: const Text('Continuar'),
                   ),
                 ),
                 const SizedBox(width: 12),
                 Expanded(
                   child: FilledButton(
-                    onPressed: _controller.stop,
+                    onPressed: () async {
+                      await _controller.stop();
+                      await _trySyncSilently(); // 🔁 sync al finalizar
+                    },
                     child: const Text('Finalizar'),
                   ),
                 ),
@@ -427,6 +614,7 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
                   await Navigator.of(
                     context,
                   ).push(MaterialPageRoute(builder: (_) => const QrScanPage()));
+                  await _trySyncSilently(); // 🔁 sync tras escanear
                 },
               ),
             ),
@@ -556,11 +744,8 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
                 style: Theme.of(context).textTheme.titleLarge,
                 textAlign: TextAlign.center,
               ),
-
-              // ⬇️ NUEVO: widget compacto de sincronización
               const SizedBox(height: 8),
               const SyncInline(mini: true),
-
               const Spacer(),
               SizedBox(height: 320, child: buildSummaryCard()),
               const Spacer(),

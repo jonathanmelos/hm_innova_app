@@ -1,4 +1,7 @@
+// lib/features/attendance/sync_service.dart
+
 import 'package:connectivity_plus/connectivity_plus.dart';
+import 'package:http/http.dart' as http;
 
 import '../../core/network/api_client.dart';
 import '../../core/device/device_service.dart';
@@ -7,8 +10,14 @@ import 'data/work_session_dao.dart';
 class SyncService {
   SyncService._();
 
+  // 👇 IMPORTANTE: misma base URL que usas en HomePage
+  // Si en algún momento cambias el dominio/puerto, recuerda actualizarlo aquí
+  // o bien podríamos leerlo de ApiConfig.baseUrl.
+  static const String _apiBaseUrl = 'http://192.168.0.100:8000';
+
   /// Sincroniza:
   /// - Sesiones cerradas
+  /// - Fotos de inicio asociadas a esas sesiones (si existen)
   /// - Ubicaciones pendientes
   /// - Pausas pendientes
   /// - Escaneos QR pendientes
@@ -41,8 +50,18 @@ class SyncService {
     // 5. Token Laravel Sanctum
     final token = await ApiClient.I.getToken();
 
+    // ⚠️ IMPORTANTE:
+    // Si no hay token (usuario no logueado todavía, o cerró sesión),
+    // NO intentamos sincronizar nada para evitar 401 del backend.
+    if (token == null || token.isEmpty) {
+      // ignore: avoid_print
+      print('SyncService: no hay token guardado, se omite la sincronización.');
+      return;
+    }
+
     // ------------------------------------------------------------------
     // 6. Enviar SESIONES a /api/work-sessions/sync
+    //    y luego las FOTOS de inicio de esas sesiones (si existen)
     // ------------------------------------------------------------------
     if (unsyncedSessions.isNotEmpty) {
       final Map<String, dynamic> payloadSessions = {};
@@ -74,16 +93,43 @@ class SyncService {
         };
       }
 
+      // 6.1 Primero sincronizamos las jornadas (JSON)
       await ApiClient.I.post(
         '/api/work-sessions/sync',
         bearerToken: token,
         body: payloadSessions,
       );
 
-      // Sessions → synced = 1
+      // 6.2 Luego, para cada sesión, subimos las fotos de inicio si existen
       for (final row in unsyncedSessions) {
         final localId = row['id'] as int;
-        await dao.markSessionAsSynced(localId);
+
+        final selfiePath = row['selfie_start'] as String?;
+        final photoPath = row['photo_start'] as String?;
+
+        bool mediaOk = true;
+
+        // Solo intentamos subir si hay ambas fotos (selfie + contexto)
+        if (selfiePath != null && photoPath != null) {
+          mediaOk = await _uploadStartMediaForSession(
+            localSessionId: localId,
+            deviceUuid: deviceUuid, // 👈 NECESARIO PARA session_key
+            selfiePath: selfiePath,
+            sitePath: photoPath,
+            token: token,
+          );
+        }
+
+        // Solo si todo fue bien (sesión + fotos) marcamos como sincronizada.
+        // Si las fotos fallan, dejamos synced=0 para reintentar en el próximo sync.
+        if (mediaOk) {
+          await dao.markSessionAsSynced(localId);
+        } else {
+          // ignore: avoid_print
+          print(
+            'SyncService: sesión $localId NO se marcó como synced porque falló la subida de fotos.',
+          );
+        }
       }
     }
 
@@ -204,6 +250,62 @@ class SyncService {
           .toList(growable: false);
 
       await dao.markQrScansAsSynced(scanIds);
+    }
+  }
+
+  /// Sube las fotos de inicio (selfie + contexto) de una sesión concreta.
+  /// Devuelve true si todo fue bien (status 200/201), false si hubo error.
+  static Future<bool> _uploadStartMediaForSession({
+    required int localSessionId,
+    required String deviceUuid, // 👈 NECESARIO PARA construir session_key
+    required String selfiePath,
+    required String sitePath,
+    required String? token,
+  }) async {
+    try {
+      final uri = Uri.parse('$_apiBaseUrl/api/jornada/iniciar');
+
+      final request = http.MultipartRequest('POST', uri);
+      request.headers['Accept'] = 'application/json';
+
+      if (token != null && token.isNotEmpty) {
+        request.headers['Authorization'] = 'Bearer $token';
+      }
+
+      // ⚠️ IMPORTANTE:
+      // Usamos el MISMO patrón que en /api/work-sessions/sync:
+      // device_session_uuid = "${deviceUuid}_$localSessionId"
+      // Aquí lo llamamos session_key y el backend lo valida contra
+      // work_sessions.device_session_uuid (ver JornadaFotosController).
+      final sessionKey = '${deviceUuid}_$localSessionId';
+      request.fields['session_key'] = sessionKey;
+
+      request.files.add(
+        await http.MultipartFile.fromPath('selfie_inicio', selfiePath),
+      );
+      request.files.add(
+        await http.MultipartFile.fromPath('foto_contexto', sitePath),
+      );
+
+      final streamed = await request.send();
+      final response = await http.Response.fromStream(streamed);
+
+      if (response.statusCode == 200 || response.statusCode == 201) {
+        return true;
+      }
+
+      // ignore: avoid_print
+      print(
+        'SyncService: fallo al subir fotos de sesion $localSessionId. '
+        'Status: ${response.statusCode}. Body: ${response.body}',
+      );
+      return false;
+    } catch (e) {
+      // ignore: avoid_print
+      print(
+        'SyncService: excepción al subir fotos de sesión $localSessionId: $e',
+      );
+      return false;
     }
   }
 }
